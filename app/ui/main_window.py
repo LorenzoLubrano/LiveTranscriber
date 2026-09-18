@@ -1,0 +1,762 @@
+"""The main window.
+
+The window **changes shape** between two states, because the two states have
+different jobs:
+
+* **Idle** — setting up. Source, devices, language and model are what matter, so
+  they get the space.
+* **Recording** — watching. Those controls are now fixed for the session and
+  only take attention away from the transcript, so they collapse into a single
+  summary line and the transcript takes everything else.
+
+Threading: the session runs entirely on worker threads and reports through
+plain callbacks. Those callbacks arrive on the wrong thread for Qt, so each one
+does nothing but emit a signal; the queued connection hands the work to the GUI
+thread. Nothing that blocks — inference, device enumeration, model loading —
+ever runs here.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtWidgets import (
+    QApplication,
+    QButtonGroup,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.audio import devices as audio_devices
+from app.audio.devices import AudioDevice, DeviceError
+from app.sessions.session import (
+    InputMode,
+    RecordingSession,
+    SessionCallbacks,
+    SessionConfig,
+    SessionState,
+)
+from app.sessions.transcript import Source, Transcript, format_timestamp
+from app.transcription import models
+from app.transcription.hardware import Accelerator, detect_gpus
+from app.transcription.streaming import StreamingUpdate
+from app.ui.theme import (
+    Palette,
+    ThemeMode,
+    palette_for,
+    stylesheet,
+    system_prefers_dark,
+)
+from app.ui.widgets.level_meter import LabelledMeter, RecordingDot
+from app.ui.widgets.transcript_view import TranscriptView
+
+logger = logging.getLogger(__name__)
+
+
+class SessionBridge(QObject):
+    """Moves session callbacks from worker threads onto the GUI thread."""
+
+    updated = Signal(object, object)   # Source, StreamingUpdate
+    state_changed = Signal(object)     # SessionState
+    failed = Signal(str)
+    warned = Signal(str)
+
+    def callbacks(self) -> SessionCallbacks:
+        return SessionCallbacks(
+            on_update=lambda source, update: self.updated.emit(source, update),
+            on_state=lambda state: self.state_changed.emit(state),
+            on_error=self.failed.emit,
+            on_warning=self.warned.emit,
+        )
+
+
+class MainWindow(QMainWindow):
+    """LiveTranscriber's main window."""
+
+    def __init__(self, settings=None) -> None:
+        super().__init__()
+        self.app_settings = settings
+        self.transcript = Transcript()
+        self.session: RecordingSession | None = None
+        self.bridge = SessionBridge()
+
+        self._theme_mode = ThemeMode.SYSTEM
+        self._palette: Palette = palette_for(self._theme_mode, system_prefers_dark())
+        self._loopbacks: list[AudioDevice] = []
+        self._microphones: list[AudioDevice] = []
+
+        self.setWindowTitle("LiveTranscriber")
+        self.setMinimumSize(560, 520)
+        self.resize(820, 780)
+
+        self._build()
+        self._connect()
+        self._apply_theme()
+        self.refresh_devices()
+        self._update_state(SessionState.IDLE)
+
+        # One timer drives the clock, the meters and the status chips.
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setInterval(100)
+        self._tick_timer.timeout.connect(self._tick)
+        self._tick_timer.start()
+
+        self.start_button.setFocus()
+
+    # ------------------------------------------------------------------ UI
+
+    def _build(self) -> None:
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        root = QVBoxLayout(central)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(12)
+
+        root.addLayout(self._build_titlebar())
+        root.addWidget(self._build_setup_panel())
+        root.addWidget(self._build_summary_bar())
+        root.addWidget(self._build_status_strip())
+
+        self.transcript_view = TranscriptView(self._palette)
+        root.addWidget(self.transcript_view, 1)
+
+        root.addWidget(self._build_search_bar())
+        root.addLayout(self._build_transport())
+
+    def _build_titlebar(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        title = QLabel("LiveTranscriber")
+        title.setObjectName("SectionTitle")
+
+        self.accel_chip = QLabel()
+        self.accel_chip.setObjectName("StatusChip")
+        self.accel_chip.setToolTip(
+            "Dove viene eseguita la trascrizione. Con una GPU NVIDIA è più veloce."
+        )
+
+        self.privacy_chip = QLabel("Tutto in locale")
+        self.privacy_chip.setObjectName("StatusChip")
+        self.privacy_chip.setToolTip(
+            "L'audio e le trascrizioni restano sul tuo computer.\n"
+            "Nessun audio viene inviato a server esterni."
+        )
+
+        self.settings_button = QPushButton("Impostazioni")
+        self.settings_button.setObjectName("QuietButton")
+        self.settings_button.setToolTip("Impostazioni avanzate (Ctrl+,)")
+
+        row.addWidget(title)
+        row.addStretch(1)
+        row.addWidget(self.accel_chip)
+        row.addWidget(self.privacy_chip)
+        row.addWidget(self.settings_button)
+        return row
+
+    def _build_setup_panel(self) -> QWidget:
+        self.setup_panel = QFrame()
+        self.setup_panel.setObjectName("InstrumentPanel")
+
+        outer = QVBoxLayout(self.setup_panel)
+        outer.setContentsMargins(18, 16, 18, 18)
+        outer.setSpacing(14)
+
+        # -- source
+        source_row = QHBoxLayout()
+        source_row.setSpacing(20)
+        source_label = QLabel("Cosa vuoi registrare")
+        source_label.setObjectName("FieldLabel")
+
+        self.mode_group = QButtonGroup(self)
+        self.mode_buttons: dict[InputMode, QRadioButton] = {}
+        for mode in (InputMode.PC, InputMode.MICROPHONE, InputMode.BOTH):
+            button = QRadioButton(mode.label)
+            self.mode_group.addButton(button)
+            self.mode_buttons[mode] = button
+            source_row.addWidget(button)
+        self.mode_buttons[InputMode.PC].setChecked(True)
+        self.mode_buttons[InputMode.PC].setToolTip(
+            "Registra l'audio riprodotto dal computer, non il microfono."
+        )
+        self.mode_buttons[InputMode.BOTH].setToolTip(
+            "Registra entrambi e li tiene separati nel testo."
+        )
+        source_row.addStretch(1)
+
+        outer.addWidget(source_label)
+        outer.addLayout(source_row)
+
+        # -- devices
+        self.loopback_combo = QComboBox()
+        self.loopback_combo.setToolTip("Il dispositivo da cui esce l'audio del computer.")
+        self.mic_combo = QComboBox()
+        self.mic_combo.setToolTip("Il microfono da registrare.")
+
+        self.loopback_row = self._field("Audio dal computer", self.loopback_combo)
+        self.mic_row = self._field("Microfono", self.mic_combo)
+        outer.addLayout(self.loopback_row)
+        outer.addLayout(self.mic_row)
+
+        # -- language and model
+        pair = QHBoxLayout()
+        pair.setSpacing(14)
+        self.language_combo = QComboBox()
+        self.model_combo = QComboBox()
+        self.model_combo.setToolTip(
+            "Modelli più grandi sono più precisi e più lenti."
+        )
+        pair.addLayout(self._field("Lingua", self.language_combo), 1)
+        pair.addLayout(self._field("Qualità", self.model_combo), 1)
+        outer.addLayout(pair)
+
+        # -- title
+        self.title_edit = QLineEdit()
+        self.title_edit.setPlaceholderText("Senza titolo")
+        self.title_edit.setMaxLength(80)
+        self.title_edit.setToolTip("Diventa il nome della cartella della registrazione.")
+        outer.addLayout(self._field("Nome (facoltativo)", self.title_edit))
+
+        self.model_hint = QLabel()
+        self.model_hint.setObjectName("Hint")
+        self.model_hint.setWordWrap(True)
+        outer.addWidget(self.model_hint)
+
+        return self.setup_panel
+
+    def _build_summary_bar(self) -> QWidget:
+        """One line replacing the setup panel while recording."""
+        self.summary_bar = QFrame()
+        self.summary_bar.setObjectName("SummaryBar")
+        self.summary_bar.hide()
+
+        row = QHBoxLayout(self.summary_bar)
+        row.setContentsMargins(16, 10, 16, 10)
+        row.setSpacing(10)
+
+        self.summary_label = QLabel()
+        self.summary_label.setObjectName("FieldLabel")
+        row.addWidget(self.summary_label)
+        row.addStretch(1)
+        return self.summary_bar
+
+    def _build_status_strip(self) -> QWidget:
+        strip = QWidget()
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(4, 0, 4, 0)
+        row.setSpacing(14)
+
+        self.record_dot = RecordingDot(self._palette)
+        self.state_label = QLabel("Pronto")
+        self.state_label.setObjectName("FieldLabel")
+
+        self.elapsed_label = QLabel("00:00:00")
+        self.elapsed_label.setObjectName("ElapsedTime")
+        self.elapsed_label.setProperty("recording", "false")
+
+        meters = QWidget()
+        meters_layout = QVBoxLayout(meters)
+        meters_layout.setContentsMargins(0, 0, 0, 0)
+        meters_layout.setSpacing(5)
+        self.pc_meter = LabelledMeter("PC", self._palette.tag_pc, self._palette)
+        self.mic_meter = LabelledMeter("MIC", self._palette.tag_mic, self._palette)
+        meters_layout.addWidget(self.pc_meter)
+        meters_layout.addWidget(self.mic_meter)
+        # An Expanding meter inside a Preferred parent collapses to a few
+        # pixels, which is exactly the widget that must never be hard to see.
+        meters.setMinimumWidth(210)
+        meters.setMaximumWidth(280)
+        meters.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        row.addWidget(self.record_dot)
+        row.addWidget(self.state_label)
+        row.addStretch(1)
+        row.addWidget(meters)
+        row.addSpacing(8)
+        row.addWidget(self.elapsed_label)
+        return strip
+
+    def _build_search_bar(self) -> QWidget:
+        self.search_bar = QWidget()
+        self.search_bar.hide()
+
+        row = QHBoxLayout(self.search_bar)
+        row.setContentsMargins(4, 0, 4, 0)
+        row.setSpacing(8)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Cerca nel testo")
+        self.search_result = QLabel()
+        self.search_result.setObjectName("Hint")
+        close = QPushButton("Chiudi")
+        close.setObjectName("QuietButton")
+        close.clicked.connect(self.hide_search)
+
+        row.addWidget(self.search_edit, 1)
+        row.addWidget(self.search_result)
+        row.addWidget(close)
+        return self.search_bar
+
+    def _build_transport(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        self.start_button = QPushButton("Avvia registrazione")
+        self.start_button.setObjectName("PrimaryButton")
+        self.start_button.setMinimumWidth(210)
+
+        self.pause_button = QPushButton("Pausa")
+        self.stop_button = QPushButton("Termina")
+        self.folder_button = QPushButton("Apri cartella")
+        self.folder_button.setObjectName("QuietButton")
+
+        self.timestamps_button = QPushButton("Orari")
+        self.timestamps_button.setObjectName("QuietButton")
+        self.timestamps_button.setCheckable(True)
+        self.timestamps_button.setToolTip("Mostra l'orario di ogni intervento")
+
+        self.autoscroll_button = QPushButton("Segui")
+        self.autoscroll_button.setObjectName("QuietButton")
+        self.autoscroll_button.setCheckable(True)
+        self.autoscroll_button.setChecked(True)
+        self.autoscroll_button.setToolTip("Scorri automaticamente al testo più recente")
+
+        row.addWidget(self.start_button)
+        row.addWidget(self.pause_button)
+        row.addWidget(self.stop_button)
+        row.addStretch(1)
+        row.addWidget(self.timestamps_button)
+        row.addWidget(self.autoscroll_button)
+        row.addWidget(self.folder_button)
+        return row
+
+    @staticmethod
+    def _field(label: str, widget: QWidget) -> QVBoxLayout:
+        box = QVBoxLayout()
+        box.setSpacing(5)
+        caption = QLabel(label)
+        caption.setObjectName("FieldLabel")
+        box.addWidget(caption)
+        box.addWidget(widget)
+        return box
+
+    # ------------------------------------------------------------- wiring
+
+    def _connect(self) -> None:
+        self.start_button.clicked.connect(self.start_recording)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self.stop_button.clicked.connect(self.stop_recording)
+        self.folder_button.clicked.connect(self.open_folder)
+        self.settings_button.clicked.connect(self.open_settings)
+
+        self.mode_group.buttonClicked.connect(lambda _: self._sync_device_rows())
+        self.model_combo.currentIndexChanged.connect(self._sync_model_hint)
+
+        self.timestamps_button.toggled.connect(self._on_timestamps_toggled)
+        self.autoscroll_button.toggled.connect(self.transcript_view.set_autoscroll)
+
+        self.transcript_view.search_requested.connect(self.show_search)
+        self.search_edit.textChanged.connect(self._on_search)
+        self.search_edit.returnPressed.connect(self._on_search)
+
+        self.bridge.updated.connect(self._on_update)
+        self.bridge.state_changed.connect(self._update_state)
+        self.bridge.failed.connect(self._on_error)
+        self.bridge.warned.connect(self._on_warning)
+
+        QShortcut(QKeySequence("Ctrl+,"), self, self.open_settings)
+        QShortcut(QKeySequence("Ctrl+R"), self, self._toggle_recording)
+        QShortcut(QKeySequence("Escape"), self, self.hide_search)
+
+        refresh = QAction("Aggiorna dispositivi", self)
+        refresh.setShortcut(QKeySequence("F5"))
+        refresh.triggered.connect(self.refresh_devices)
+        self.addAction(refresh)
+
+    def _apply_theme(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(stylesheet(self._palette))
+        self.transcript_view.set_palette(self._palette)
+        self.record_dot.set_palette(self._palette)
+        self.pc_meter.set_palette(self._palette)
+        self.mic_meter.set_palette(self._palette)
+
+        gpus = detect_gpus()
+        self.accel_chip.setText(
+            f"GPU {gpus[0].short_name}" if gpus else "CPU"
+        )
+
+    def set_theme(self, mode: ThemeMode) -> None:
+        self._theme_mode = mode
+        self._palette = palette_for(mode, system_prefers_dark())
+        self._apply_theme()
+
+    # ------------------------------------------------------------ devices
+
+    @Slot()
+    def refresh_devices(self) -> None:
+        """Re-enumerate audio devices. Cheap enough to run on the GUI thread."""
+        try:
+            audio_devices.refresh()
+            self._loopbacks = audio_devices.list_loopbacks()
+            self._microphones = audio_devices.list_microphones()
+        except DeviceError as exc:
+            self._on_error(exc.user_message)
+            return
+
+        self._fill_combo(self.loopback_combo, self._loopbacks)
+        self._fill_combo(self.mic_combo, self._microphones)
+        self._fill_languages()
+        self._fill_models()
+        self._sync_device_rows()
+
+    @staticmethod
+    def _fill_combo(combo: QComboBox, items: list[AudioDevice]) -> None:
+        previous = combo.currentData()
+        combo.clear()
+        for device in items:
+            combo.addItem(device.label, device)
+        if not items:
+            combo.addItem("Nessun dispositivo disponibile", None)
+            combo.setEnabled(False)
+        else:
+            combo.setEnabled(True)
+            index = combo.findData(previous)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            else:
+                default = next((i for i, d in enumerate(items) if d.is_default), 0)
+                combo.setCurrentIndex(default)
+
+    def _fill_languages(self) -> None:
+        from app.transcription.engine import PRIORITY_LANGUAGES
+
+        if self.language_combo.count():
+            return
+        for code, label in PRIORITY_LANGUAGES:
+            self.language_combo.addItem(label, code)
+
+    def _fill_models(self) -> None:
+        previous = self.model_combo.currentData()
+        self.model_combo.clear()
+        for spec in models.list_models():
+            installed = models.is_available(spec.key)
+            suffix = "" if installed else f"  — da scaricare ({spec.size_label})"
+            self.model_combo.addItem(f"{spec.display_name}  ·  {spec.quality}{suffix}",
+                                     spec.key)
+
+        index = self.model_combo.findData(previous or models.DEFAULT_MODEL)
+        self.model_combo.setCurrentIndex(max(0, index))
+        self._sync_model_hint()
+
+    def _sync_model_hint(self) -> None:
+        key = self.model_combo.currentData()
+        if not key:
+            return
+        spec = models.get_spec(key)
+        if models.is_available(key):
+            self.model_hint.setText(spec.description)
+        else:
+            self.model_hint.setText(
+                f"{spec.description}  Il modello deve essere scaricato "
+                f"({spec.size_label}); serve la connessione una sola volta."
+            )
+
+    def _sync_device_rows(self) -> None:
+        mode = self.current_mode()
+        wants_pc = mode in (InputMode.PC, InputMode.BOTH)
+        wants_mic = mode in (InputMode.MICROPHONE, InputMode.BOTH)
+        _set_row_visible(self.loopback_row, wants_pc)
+        _set_row_visible(self.mic_row, wants_mic)
+
+    def current_mode(self) -> InputMode:
+        for mode, button in self.mode_buttons.items():
+            if button.isChecked():
+                return mode
+        return InputMode.PC
+
+    # ---------------------------------------------------------- recording
+
+    @Slot()
+    def _toggle_recording(self) -> None:
+        if self.session and self.session.is_active:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    @Slot()
+    def start_recording(self) -> None:
+        if self.session and self.session.is_active:
+            return
+
+        model_key = self.model_combo.currentData() or models.DEFAULT_MODEL
+        if not models.is_available(model_key):
+            self._offer_download(model_key)
+            return
+
+        config = SessionConfig(
+            mode=self.current_mode(),
+            loopback_device=self.loopback_combo.currentData(),
+            microphone_device=self.mic_combo.currentData(),
+            model=model_key,
+            accelerator=Accelerator.AUTO,
+            language=self.language_combo.currentData() or "auto",
+            title=self.title_edit.text().strip(),
+        )
+
+        self.transcript.clear()
+        self.transcript_view.clear()
+        self.transcript_view.set_placeholder()
+
+        self.session = RecordingSession(config, self.bridge.callbacks(), self.transcript)
+        self.start_button.setEnabled(False)
+        self.state_label.setText("Avvio…")
+        QApplication.processEvents()
+
+        try:
+            self.session.start()
+        except DeviceError as exc:
+            self.session = None
+            self._on_error(exc.user_message)
+            self._update_state(SessionState.IDLE)
+        except Exception as exc:
+            self.session = None
+            self._on_error(getattr(exc, "user_message", "Impossibile avviare la registrazione."))
+            logger.exception("Session start failed")
+            self._update_state(SessionState.IDLE)
+
+    @Slot()
+    def toggle_pause(self) -> None:
+        if self.session is None:
+            return
+        if self.session.state is SessionState.RECORDING:
+            self.session.pause()
+        elif self.session.state is SessionState.PAUSED:
+            self.session.resume()
+
+    @Slot()
+    def stop_recording(self) -> None:
+        if self.session is None:
+            return
+        self.stop_button.setEnabled(False)
+        self.state_label.setText("Salvataggio…")
+        QApplication.processEvents()
+
+        directory = self.session.stop()
+        self.session = None
+        if directory:
+            self.state_label.setText(f"Salvato in {directory.name}")
+
+    def _offer_download(self, model_key: str) -> None:
+        spec = models.get_spec(model_key)
+        answer = QMessageBox.question(
+            self,
+            "Scaricare il modello?",
+            f"Il modello {spec.display_name} deve essere scaricato.\n\n"
+            f"Dimensione: {spec.size_label}\n\n"
+            "Serve la connessione a Internet una sola volta. "
+            "Dopo il download l'app funziona senza connessione.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._download_model(model_key)
+
+    def _download_model(self, model_key: str) -> None:
+        from app.ui.download_dialog import ModelDownloadDialog
+
+        dialog = ModelDownloadDialog(model_key, self)
+        if dialog.exec() == ModelDownloadDialog.DialogCode.Accepted:
+            self._fill_models()
+            index = self.model_combo.findData(model_key)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
+
+    # --------------------------------------------------------- transcript
+
+    @Slot(object, object)
+    def _on_update(self, source: Source, update: StreamingUpdate) -> None:
+        if update.confirmed:
+            self.transcript_view.append_confirmed(
+                source, update.confirmed[0].start, update.confirmed_text
+            )
+        if update.provisional:
+            self.transcript_view.set_provisional(source, update.provisional_text)
+        else:
+            self.transcript_view.clear_provisional()
+
+    def _on_timestamps_toggled(self, enabled: bool) -> None:
+        self.transcript_view.set_show_timestamps(enabled)
+        self.transcript_view.rebuild(self.transcript.segments)
+
+    # ------------------------------------------------------------- search
+
+    @Slot()
+    def show_search(self) -> None:
+        self.search_bar.show()
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
+
+    @Slot()
+    def hide_search(self) -> None:
+        self.search_bar.hide()
+        self.search_edit.clear()
+        self.transcript_view.setFocus()
+
+    def _on_search(self) -> None:
+        query = self.search_edit.text()
+        if not query.strip():
+            self.search_result.clear()
+            return
+        hits = self.transcript.search(query)
+        self.search_result.setText(
+            "nessun risultato" if not hits else f"{len(hits)} risultati"
+        )
+        if hits:
+            self.transcript_view.find(query)
+
+    # -------------------------------------------------------------- state
+
+    @Slot(object)
+    def _update_state(self, state: SessionState) -> None:
+        recording = state is SessionState.RECORDING
+        paused = state is SessionState.PAUSED
+        active = recording or paused
+
+        self.setup_panel.setVisible(not active)
+        self.summary_bar.setVisible(active)
+        if active:
+            self.summary_label.setText(self._summary_text())
+
+        self.start_button.setVisible(not active)
+        self.start_button.setEnabled(not active)
+        self.pause_button.setVisible(active)
+        self.stop_button.setVisible(active)
+        self.stop_button.setEnabled(active)
+        self.pause_button.setText("Riprendi" if paused else "Pausa")
+
+        self.record_dot.set_active(recording)
+        self.elapsed_label.setProperty("recording", "true" if active else "false")
+        self.elapsed_label.style().unpolish(self.elapsed_label)
+        self.elapsed_label.style().polish(self.elapsed_label)
+
+        mode = self.current_mode()
+        self.pc_meter.setVisible(mode in (InputMode.PC, InputMode.BOTH))
+        self.mic_meter.setVisible(mode in (InputMode.MICROPHONE, InputMode.BOTH))
+        self.pc_meter.set_active(recording)
+        self.mic_meter.set_active(recording)
+
+        self.state_label.setText(
+            {
+                SessionState.IDLE: "Pronto",
+                SessionState.STARTING: "Avvio…",
+                SessionState.RECORDING: "Registrazione in corso",
+                SessionState.PAUSED: "In pausa",
+                SessionState.STOPPING: "Salvataggio…",
+                SessionState.STOPPED: "Registrazione salvata",
+            }.get(state, "")
+        )
+
+    def _summary_text(self) -> str:
+        mode = self.current_mode()
+        model = self.model_combo.currentData() or ""
+        language = self.language_combo.currentText()
+        parts = [mode.label]
+        if model:
+            parts.append(models.get_spec(model).display_name)
+        parts.append(language)
+        return "   ·   ".join(parts)
+
+    def _tick(self) -> None:
+        if self.session is None:
+            return
+        self.elapsed_label.setText(
+            format_timestamp(self.session.elapsed, always_hours=True)
+        )
+        for source, stats in self.session.stats().items():
+            meter = self.pc_meter if source is Source.PC else self.mic_meter
+            meter.set_level(stats.level)
+
+    # ------------------------------------------------------------- errors
+
+    @Slot(str)
+    def _on_error(self, message: str) -> None:
+        QMessageBox.warning(self, "LiveTranscriber", message)
+
+    @Slot(str)
+    def _on_warning(self, message: str) -> None:
+        self.state_label.setText(message)
+
+    # -------------------------------------------------------------- misc
+
+    @Slot()
+    def open_folder(self) -> None:
+        import os
+
+        from app.utils.paths import default_recordings_dir
+
+        target: Path = (
+            self.session.directory
+            if self.session and self.session.directory
+            else default_recordings_dir()
+        )
+        target.mkdir(parents=True, exist_ok=True)
+        os.startfile(target)  # noqa: S606 - opening a folder the app owns
+
+    @Slot()
+    def open_settings(self) -> None:
+        from app.ui.settings_window import SettingsDialog
+
+        dialog = SettingsDialog(self)
+        dialog.exec()
+
+    def choose_output_folder(self) -> Path | None:
+        from app.utils.paths import default_recordings_dir
+
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Cartella delle registrazioni", str(default_recordings_dir())
+        )
+        return Path(chosen) if chosen else None
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override
+        """Spec §10: never lose a recording to a stray window close."""
+        if self.session is not None and self.session.is_active:
+            answer = QMessageBox.question(
+                self,
+                "Registrazione in corso",
+                "È in corso una registrazione.\n\nVuoi interromperla e salvare?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if answer != QMessageBox.StandardButton.Save:
+                event.ignore()
+                return
+            self.stop_recording()
+
+        self._tick_timer.stop()
+        audio_devices.terminate_pyaudio()
+        event.accept()
+
+
+def _set_row_visible(layout: QVBoxLayout, visible: bool) -> None:
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        widget = item.widget() if item else None
+        if widget is not None:
+            widget.setVisible(visible)
