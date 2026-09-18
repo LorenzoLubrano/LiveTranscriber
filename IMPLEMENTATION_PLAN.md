@@ -289,6 +289,62 @@ premo Termina
 
 ## Milestone 6 — Sessions, export, autosave, recovery
 
+- [x] `app/export/base.py` — timestamps, segment grouping, cue wrapping
+- [x] `app/export/txt.py` / `srt.py` / `vtt.py` / `json_export.py`
+- [x] `app/export/__init__.py` — format registry, `export_all`
+- [x] `app/sessions/autosave.py` — periodic crash-safe save
+- [x] `app/sessions/recovery.py` — find and rescue interrupted recordings
+- [x] `app/ui/recovery_dialog.py` — the Recupera / Ignora prompt
+- [x] Export button in the main window
+
+### Why exports regroup
+
+Streaming confirms text in whatever fragments two passes agreed on, so one
+spoken sentence often lands as three segments. That is the right record of
+*what was confirmed when*, and the wrong shape for a document — so each format
+regroups with its own rules. Paragraphs merge freely and break on real pauses;
+subtitle cues cap at ~84 characters and 7 seconds, because a cue has to be
+readable before it disappears.
+
+Cue lines are balanced rather than greedily filled: filling to the full width
+left stubs like `Consideriamo adesso la miltoniana del / sistema, dove il`.
+
+`transcript.json` is deliberately **not** grouped. It is the archival form —
+TXT, SRT and VTT are all derivable from it, and none of them from each other.
+
+### Crash safety
+
+`session.json` carries `completed: false` for the whole recording and is only
+set true on a clean stop. A session that died is therefore exactly a session
+whose record still says false — that is the entire recovery signal.
+
+Both files are written to a temporary sibling and moved into place, so an
+interrupted save leaves the previous good file rather than half of a new one.
+The transcript's revision counter means idle ticks write nothing.
+
+### Verified 2026-09-18, end to end
+
+Real recording, then a simulated crash:
+
+```
+1. REGISTRAZIONE REALE CON EXPORT
+   durante la registrazione, completed = False
+   audio.wav 592 KB · session.json · transcript.{json,srt,txt,vtt}
+   dopo lo stop, completed = True
+
+2. CRASH SIMULATO E RECUPERO
+   simulato: 4 segmenti salvati, nessun completed
+   sessioni interrotte trovate: 1
+     -> Lezione interrotta · 00:00:39 · 4 segmenti · 39 KB di audio
+   recuperati 4 segmenti; export scritti; non viene piu' offerta
+```
+
+A previous completed recording next to the crashed one is provably untouched,
+and *Ignora* stops the prompt without deleting anything.
+
+389 tests passing, `ruff` clean.
+
+
 ## Milestone 7 — Robustness (2–4 h soak test, RAM/handle/VRAM checks)
 
 ## Milestone 8 — Packaging (`scripts/build_windows.ps1`, portable folder)

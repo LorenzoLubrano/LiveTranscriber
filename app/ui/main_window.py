@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
 
         self.start_button.setFocus()
 
+        # Deferred so the window is painted before a modal appears over it;
+        # asking about a crash against a grey rectangle looks like a second crash.
+        QTimer.singleShot(400, self.offer_recovery)
+
     # ------------------------------------------------------------------ UI
 
     def _build(self) -> None:
@@ -322,6 +326,10 @@ class MainWindow(QMainWindow):
 
         self.pause_button = QPushButton("Pausa")
         self.stop_button = QPushButton("Termina")
+        self.export_button = QPushButton("Esporta")
+        self.export_button.setObjectName("QuietButton")
+        self.export_button.setToolTip("Salva la trascrizione in un altro formato")
+
         self.folder_button = QPushButton("Apri cartella")
         self.folder_button.setObjectName("QuietButton")
 
@@ -342,6 +350,7 @@ class MainWindow(QMainWindow):
         row.addStretch(1)
         row.addWidget(self.timestamps_button)
         row.addWidget(self.autoscroll_button)
+        row.addWidget(self.export_button)
         row.addWidget(self.folder_button)
         return row
 
@@ -362,6 +371,7 @@ class MainWindow(QMainWindow):
         self.pause_button.clicked.connect(self.toggle_pause)
         self.stop_button.clicked.connect(self.stop_recording)
         self.folder_button.clicked.connect(self.open_folder)
+        self.export_button.clicked.connect(self.export_transcript)
         self.settings_button.clicked.connect(self.open_settings)
 
         self.mode_group.buttonClicked.connect(lambda _: self._sync_device_rows())
@@ -718,6 +728,77 @@ class MainWindow(QMainWindow):
         )
         target.mkdir(parents=True, exist_ok=True)
         os.startfile(target)  # noqa: S606 - opening a folder the app owns
+
+    @Slot()
+    def export_transcript(self) -> None:
+        """Save the transcript in a chosen format."""
+        from app.export import get_format, list_formats
+
+        if not len(self.transcript):
+            QMessageBox.information(
+                self, "LiveTranscriber", "Non c'è ancora testo da esportare."
+            )
+            return
+
+        filters = ";;".join(fmt.filter_string for fmt in list_formats())
+        suggested = self._last_directory() / "transcript.txt"
+        chosen, selected_filter = QFileDialog.getSaveFileName(
+            self, "Esporta la trascrizione", str(suggested), filters
+        )
+        if not chosen:
+            return
+
+        fmt = next(
+            (f for f in list_formats() if f.filter_string == selected_filter),
+            None,
+        ) or get_format(Path(chosen).suffix.lstrip(".").lower() or "txt")
+
+        path = Path(chosen)
+        if path.suffix.lower() != fmt.extension:
+            path = path.with_suffix(fmt.extension)
+
+        try:
+            fmt.write(self.transcript, path, self.title_edit.text().strip())
+        except Exception as exc:
+            self._on_error(
+                getattr(exc, "user_message", "Impossibile salvare il file.")
+            )
+            return
+        self.state_label.setText(f"Esportato in {path.name}")
+
+    def _last_directory(self) -> Path:
+        from app.utils.paths import default_recordings_dir
+
+        if self.session is not None and self.session.directory:
+            return self.session.directory
+        return default_recordings_dir()
+
+    @Slot()
+    def offer_recovery(self) -> None:
+        """Ask about an interrupted recording, if there is one (spec §14)."""
+        from app.sessions.recovery import find_incomplete
+
+        try:
+            sessions = find_incomplete()
+        except Exception:
+            logger.exception("Could not scan for interrupted sessions")
+            return
+        if not sessions:
+            return
+
+        from app.ui.recovery_dialog import RecoveryDialog
+
+        dialog = RecoveryDialog(sessions, self)
+        if dialog.exec() != RecoveryDialog.DialogCode.Accepted:
+            return
+        if dialog.recovered is None or not len(dialog.recovered):
+            self.state_label.setText("Registrazione recuperata (solo audio)")
+            return
+
+        self.transcript.load(dialog.recovered.to_dicts())
+        self.transcript_view.rebuild(self.transcript.segments)
+        name = dialog.recovered_session.directory.name if dialog.recovered_session else ""
+        self.state_label.setText(f"Recuperata: {name}")
 
     @Slot()
     def open_settings(self) -> None:
