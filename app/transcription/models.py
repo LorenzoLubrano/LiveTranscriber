@@ -17,6 +17,7 @@ import shutil
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from tqdm import tqdm
@@ -111,6 +112,69 @@ CATALOGUE: tuple[ModelSpec, ...] = (
 _BY_KEY = {spec.key: spec for spec in CATALOGUE}
 
 DEFAULT_MODEL = "small"
+
+
+class Quality(StrEnum):
+    """First-run choice (spec §25), in words a normal user understands."""
+
+    FAST = "fast"
+    BALANCED = "balanced"
+    BEST = "best"
+
+    @property
+    def label(self) -> str:
+        return {
+            Quality.FAST: "Veloce",
+            Quality.BALANCED: "Bilanciata",
+            Quality.BEST: "Massima qualità",
+        }[self]
+
+
+#: Which model each quality maps to, with and without a GPU.
+#:
+#: The split exists because **streaming costs far more than transcribing a file
+#: once**. LocalAgreement re-transcribes a growing buffer, so each second of
+#: audio passes through Whisper roughly four or five times. Measured on the
+#: development machine (Ryzen 7 260, RTX 5050), transcribing a file gave
+#: small/CPU a 7.5x real-time factor — but the same model *streaming* used 70%
+#: of the audio time, leaving only 1.4x of headroom and latency spikes to 9.6s.
+#: Medium on CPU used 115%: it cannot keep up at all, and latency grows without
+#: bound.
+#:
+#: So a one-shot benchmark must never be used to choose a live model.
+_QUALITY_MAP: dict[Quality, dict[bool, str]] = {
+    #                      GPU        CPU
+    Quality.FAST:     {True: "tiny",  False: "tiny"},
+    Quality.BALANCED: {True: "small", False: "base"},
+    Quality.BEST:     {True: "medium", False: "small"},
+}
+
+
+def recommend_model(quality: Quality, has_gpu: bool) -> ModelSpec:
+    """Model for a quality preset on this hardware.
+
+    Measured streaming headroom on the development machine:
+
+    ======  ======  ==========  =============  =========
+    model   device  inference   headroom       accuracy
+    ======  ======  ==========  =============  =========
+    tiny    GPU     6%          16.2x          83%
+    tiny    CPU     14%          7.4x          84%
+    small   GPU     13%          7.7x          94%
+    small   CPU     70%          1.4x          94%
+    medium  GPU     28%          3.6x          95%
+    medium  CPU     115%         0.9x          unusable
+    ======  ======  ==========  =============  =========
+    """
+    return get_spec(_QUALITY_MAP[quality][bool(has_gpu)])
+
+
+def quality_of(model_key: str, has_gpu: bool) -> Quality | None:
+    """Reverse lookup, so the settings screen can show the current preset."""
+    for quality, mapping in _QUALITY_MAP.items():
+        if mapping[bool(has_gpu)] == model_key:
+            return quality
+    return None
 
 
 class ModelError(RuntimeError):

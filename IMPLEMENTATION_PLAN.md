@@ -178,12 +178,56 @@ works offline out of the box.
 
 ## Milestone 4 — Real-time pipeline
 
-- [ ] `app/transcription/vad.py` — Silero VAD (ONNX), with an energy-gate fallback
-- [ ] `app/transcription/streaming.py` — windowing, overlap, confirm/provisional
-- [ ] Deduplication / reconciliation across overlapping windows
-- [ ] Silence handling (no hallucinated text on quiet audio)
-- [ ] `app/sessions/transcript.py` — segment store, search, export source of truth
-- [ ] Latency measured end-to-end
+- [x] `app/transcription/vad.py` — Silero VAD (reuses faster-whisper's bundled model)
+- [x] `app/transcription/streaming.py` — LocalAgreement-2, confirm/provisional
+- [x] Deduplication / reconciliation across overlapping windows
+- [x] Silence handling (no hallucinated text on quiet audio)
+- [x] `app/sessions/transcript.py` — segment store, search, export source of truth
+- [x] Latency measured end-to-end
+- [x] `scripts/realtime_test.py` — paced diagnostic
+
+### How streaming works
+
+**LocalAgreement-2**: transcribe a growing buffer repeatedly, confirm only what
+two consecutive runs agreed on. Observed doing its job on a real run:
+
+```
+provisional: Nell'imite adiabatico la variazione e'       <- wrong, not confirmed
+provisional: Nel limite a diabatico la variazione e' ...   <- next run disagrees
+CONFIRMED  : Nel limite a diabatico la variazione e' ...   <- only now committed
+```
+
+This addresses each failure the spec lists: a word at the buffer edge is never
+confirmed while truncated; confirmed audio is dropped from the buffer so it
+cannot be emitted twice; the last confirmed words are passed back as
+`initial_prompt` for context; and VAD means Whisper is never called on silence.
+
+**Verified 2026-09-18**, fed at wall-clock speed, capture and inference on
+separate threads exactly as the app is built:
+
+| model | device | inference | headroom | avg latency | max | words | duplicates |
+|---|---|---|---|---|---|---|---|
+| tiny | GPU | 6% | 16.2x | 2.40 s | 4.73 s | 83% | none |
+| tiny | CPU | 14% | 7.4x | 3.02 s | 5.40 s | 84% | none |
+| **small** | **GPU** | **13%** | **7.7x** | **2.38 s** | **3.03 s** | **94%** | none |
+| small | CPU | 70% | 1.4x | 4.12 s | 9.63 s | 94% | none |
+| medium | GPU | 28% | 3.6x | 2.45 s | 2.93 s | 95% | none |
+| medium | CPU | 115% | 0.9x | 14.6 s | 23.8 s | — | cannot keep up |
+
+Streaming output is a **100% word match with transcribing the same audio in one
+go** — the windowing loses nothing. Silence: **0 inferences run**, no text.
+
+### The correction this milestone forced
+
+The Milestone 3 benchmark measured *one-shot* transcription and reported
+small/CPU at RTF 7.5x. That number does not carry over to live use:
+LocalAgreement re-transcribes a growing buffer, so each second of audio passes
+through Whisper roughly **four or five times**. The same model streaming uses
+70% of the audio time — 1.4x headroom, not 7.5x — and medium/CPU at 115% cannot
+keep up at all.
+
+So the quality presets are hardware-aware (`models.recommend_model`), and a
+one-shot benchmark must never be used to choose a live model.
 
 ## Milestone 5 — GUI (PySide6; `frontend-design` skill here)
 

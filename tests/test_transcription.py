@@ -295,3 +295,50 @@ def test_empty_audio_returns_an_empty_result():
         assert result.segments == []
     finally:
         engine.unload()
+
+
+# -- quality presets -------------------------------------------------------
+
+
+def test_quality_presets_cover_every_level():
+    from app.transcription.models import Quality, recommend_model
+
+    for quality in Quality:
+        for has_gpu in (True, False):
+            spec = recommend_model(quality, has_gpu)
+            assert spec.key in {s.key for s in models.list_models()}
+            assert quality.label
+
+
+def test_cpu_gets_a_lighter_model_than_gpu():
+    """Streaming costs ~5x a one-shot run; CPU cannot afford the same model.
+
+    Measured: small/CPU streaming used 70% of the audio time (1.4x headroom,
+    latency spikes to 9.6s) and medium/CPU used 115% — it cannot keep up.
+    """
+    from app.transcription.models import Quality, recommend_model
+
+    for quality in Quality:
+        gpu_spec = recommend_model(quality, has_gpu=True)
+        cpu_spec = recommend_model(quality, has_gpu=False)
+        assert cpu_spec.approx_size_mb <= gpu_spec.approx_size_mb, (
+            f"{quality} picks a heavier model on CPU than on GPU"
+        )
+
+
+def test_medium_is_never_recommended_without_a_gpu():
+    """It ran at 115% of real time on this CPU: latency grows without bound."""
+    from app.transcription.models import Quality, recommend_model
+
+    for quality in Quality:
+        assert recommend_model(quality, has_gpu=False).key not in ("medium", "large-v3")
+
+
+def test_quality_reverse_lookup():
+    from app.transcription.models import Quality, quality_of, recommend_model
+
+    for quality in Quality:
+        for has_gpu in (True, False):
+            key = recommend_model(quality, has_gpu).key
+            assert quality_of(key, has_gpu) == quality
+    assert quality_of("large-v3", True) is None
