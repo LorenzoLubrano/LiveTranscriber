@@ -335,3 +335,63 @@ def test_language_list_leads_with_automatic(qtbot):
 
     assert window.language_combo.itemData(0) == "auto"
     assert window.language_combo.itemData(1) == "it"
+
+
+# -- hardware-aware default ------------------------------------------------
+
+def test_default_model_is_lighter_without_a_gpu(qtbot, monkeypatch):
+    """Streaming costs ~5x a one-shot run, so CPU cannot take the GPU default.
+
+    Measured: small streaming leaves 7.7x headroom on GPU and 1.4x on this CPU,
+    with latency spikes to 9.6s.
+    """
+    from app.transcription.hardware import AcceleratorChoice
+    from app.transcription.models import get_spec
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    monkeypatch.setattr(
+        "app.transcription.hardware.select_accelerator",
+        lambda *a, **k: AcceleratorChoice(device="cpu", compute_type="int8"),
+    )
+    cpu_default = window._default_model()
+
+    monkeypatch.setattr(
+        "app.transcription.hardware.select_accelerator",
+        lambda *a, **k: AcceleratorChoice(device="cuda", compute_type="float16"),
+    )
+    gpu_default = window._default_model()
+
+    assert get_spec(cpu_default).approx_size_mb <= get_spec(gpu_default).approx_size_mb
+
+
+def test_default_prefers_a_model_already_on_disk(qtbot, monkeypatch):
+    """Offering to download on first launch is worse than a slightly smaller model."""
+    from app.transcription import models
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    monkeypatch.setattr(models, "is_available", lambda key: key == "tiny")
+    monkeypatch.setattr(models, "installed_models", lambda: [models.get_spec("tiny")])
+
+    assert window._default_model() == "tiny"
+
+
+def test_accelerator_chip_never_promises_more_than_the_build_has(qtbot, monkeypatch):
+    """A CPU-only build must not display "GPU" just because a card is present."""
+    from app.transcription.hardware import AcceleratorChoice
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    monkeypatch.setattr(
+        "app.transcription.hardware.select_accelerator",
+        lambda *a, **k: AcceleratorChoice(device="cpu", compute_type="int8"),
+    )
+    window._refresh_accelerator_chip()
+    assert window.accel_chip.text() == "CPU"

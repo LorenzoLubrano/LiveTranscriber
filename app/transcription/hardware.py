@@ -276,6 +276,21 @@ def select_accelerator(
             )
         return cpu_choice()
 
+    # A card is not enough: CTranslate2 also needs the CUDA runtime libraries.
+    # A CPU-only build ships without them, and nvidia-smi still reports the GPU
+    # happily — so without this check the app would announce "NVIDIA RTX 5050"
+    # while quietly running on the CPU after a failed load.
+    from app.transcription.cuda_setup import cuda_libraries_available
+
+    if not cuda_libraries_available():
+        logger.info("GPU present but CUDA runtime libraries are not installed")
+        if preference is Accelerator.GPU:
+            return cpu_choice(
+                "Le librerie CUDA non sono installate in questa versione. "
+                "La trascrizione utilizzerà la CPU."
+            )
+        return cpu_choice()
+
     gpu = gpus[0]
 
     # Warn — but do not refuse — when the model looks too big for free VRAM.
