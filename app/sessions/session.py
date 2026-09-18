@@ -33,7 +33,10 @@ from app.audio.loopback import create_loopback_capture
 from app.audio.microphone import create_microphone_capture
 from app.audio.recorder import MixRecorder
 from app.audio.resampler import TARGET_SAMPLE_RATE, StreamResampler
-from app.sessions.transcript import Source, Transcript
+from app.export import export_all
+from app.export.json_export import SessionRecord
+from app.sessions.autosave import Autosave
+from app.sessions.transcript import Source, Transcript, TranscriptStats
 from app.transcription.engine import TranscriptionEngine, TranscriptionSettings
 from app.transcription.hardware import Accelerator
 from app.transcription.streaming import (
@@ -341,6 +344,9 @@ class RecordingSession:
         self._pipelines: dict[Source, _SourcePipeline] = {}
         self._engines: list[TranscriptionEngine] = []
         self._recorder: MixRecorder | None = None
+        self._autosave: Autosave | None = None
+        self.record = SessionRecord()
+        self.exports: dict[str, Path] = {}
         self._watchdog = CaptureWatchdog()
         self._paused_at: float = 0.0
         self._paused_total: float = 0.0
@@ -396,6 +402,16 @@ class RecordingSession:
                 self._watchdog.add(pipeline.stream)
             self._watchdog.start()
 
+            self.record = self._build_record()
+            self._autosave = Autosave(
+                self.directory,
+                self.transcript,
+                self.record,
+                on_sync=self.sync_to_disk,
+                on_error=self.callbacks.warning,
+            )
+            self._autosave.start()
+
             self.started_at = time.monotonic()
             self._set_state(SessionState.RECORDING)
             logger.info("Session started in %s", self.directory)
@@ -432,6 +448,7 @@ class RecordingSession:
             self._set_state(SessionState.STOPPING)
 
         self._teardown()
+        self._write_exports()
         self._set_state(SessionState.STOPPED)
         logger.info(
             "Session stopped: %.1fs, %d segments",
@@ -539,6 +556,65 @@ class RecordingSession:
             )
 
     # -- output -----------------------------------------------------------
+
+    def _build_record(self) -> SessionRecord:
+        from datetime import datetime
+
+        from app import __version__
+
+        choice = self._engines[0].choice if self._engines else None
+        return SessionRecord(
+            title=self.config.title,
+            directory=str(self.directory),
+            started=datetime.now().isoformat(timespec="seconds"),
+            mode=str(self.config.mode),
+            model=self.config.model,
+            language=self.config.language,
+            device=choice.device if choice else "",
+            compute_type=choice.compute_type if choice else "",
+            loopback_device=(
+                self.config.loopback_device.display_name
+                if self.config.loopback_device
+                else ""
+            ),
+            microphone_device=(
+                self.config.microphone_device.display_name
+                if self.config.microphone_device
+                else ""
+            ),
+            audio_files={k: str(v) for k, v in self.audio_paths.items()},
+            app_version=__version__,
+        )
+
+    def _write_exports(self) -> None:
+        """Write TXT, SRT, VTT and JSON, then close the session record."""
+        from datetime import datetime
+
+        if self.directory is None:
+            return
+
+        self.record.finished = datetime.now().isoformat(timespec="seconds")
+        self.record.duration = round(self._final_elapsed, 3)
+        self.record.stats = TranscriptStats.of(self.transcript).to_dict()
+        self.record.audio_files = {k: str(v) for k, v in self.audio_paths.items()}
+
+        if len(self.transcript):
+            try:
+                self.exports = export_all(
+                    self.transcript, self.directory, title=self.config.title
+                )
+                self.record.exports = {k: str(v) for k, v in self.exports.items()}
+            except Exception:
+                logger.exception("Export failed")
+                self.callbacks.warning(
+                    "Impossibile salvare alcuni formati della trascrizione. "
+                    "L'audio e i dati sono comunque salvati."
+                )
+
+        # Marks the session complete, which is what stops recovery offering it.
+        if self._autosave is not None:
+            self._autosave.stop(completed=True)
+            self._autosave = None
 
     @property
     def audio_paths(self) -> dict[str, Path]:
