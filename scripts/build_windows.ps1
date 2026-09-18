@@ -45,7 +45,10 @@ $Venv = Join-Path $Root '.venv'
 $Python = Join-Path $Venv 'Scripts\python.exe'
 $DistDir = Join-Path $Root 'dist'
 $BuildDir = Join-Path $Root 'build'
-$AppDir = Join-Path $DistDir 'LiveTranscriber'
+# The spec names the folder after the variant, so a GPU build can never
+# overwrite a CPU build that someone is already using.
+$BundleName = if ($Gpu) { 'LiveTranscriber-GPU' } else { 'LiveTranscriber' }
+$AppDir = Join-Path $DistDir $BundleName
 
 function Write-Step([string]$Message) {
     Write-Host ''
@@ -95,7 +98,8 @@ if (-not $SkipTests) {
 
 if ($Clean) {
     Write-Step 'Cleaning previous build output'
-    foreach ($dir in @($BuildDir, $DistDir)) {
+    # Only this variant's output, so cleaning a GPU build leaves the CPU one.
+    foreach ($dir in @((Join-Path $BuildDir $BundleName), $AppDir)) {
         if (Test-Path $dir) {
             Remove-Item -Recurse -Force $dir
             Write-Detail "removed $dir"

@@ -23,6 +23,10 @@ ROOT = SPEC_DIR.parent
 
 BUNDLE_CUDA = os.environ.get("LIVETRANSCRIBER_BUNDLE_CUDA", "0") == "1"
 
+# Distinct output folders: building the GPU variant must never overwrite a CPU
+# build someone is already using.
+BUNDLE_NAME = "LiveTranscriber-GPU" if BUNDLE_CUDA else "LiveTranscriber"
+
 binaries = []
 datas = []
 hiddenimports = [
@@ -58,7 +62,10 @@ for package in ("tokenizers", "huggingface_hub"):
 if BUNDLE_CUDA:
     import nvidia
 
-    nvidia_root = Path(nvidia.__file__).parent
+    # `nvidia` is a namespace package, so __file__ is None and only __path__
+    # exists. Reaching for __file__ here failed the whole GPU build with a
+    # TypeError deep inside pathlib.
+    nvidia_root = Path(list(nvidia.__path__)[0])
     for dll in nvidia_root.rglob("*.dll"):
         # Keep the nvidia/<pkg>/bin layout: cuda_setup.py looks for exactly
         # that shape next to the executable when frozen.
@@ -137,5 +144,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="LiveTranscriber",
+    name=BUNDLE_NAME,
 )
