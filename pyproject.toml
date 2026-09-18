@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livetranscriber"
+version = "0.1.0"
+description = "Local, privacy-first real-time transcription of PC audio and microphone on Windows"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Lorenzo Lubrano" }]
+keywords = ["transcription", "whisper", "wasapi", "loopback", "offline", "speech-to-text"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+]
+
+dependencies = [
+    "PySide6>=6.8",
+    "faster-whisper>=1.2.0",
+    "PyAudioWPatch>=0.2.12.8",
+    "numpy>=2.0",
+    "soxr>=0.5",
+    "soundfile>=0.12",
+    "onnxruntime>=1.20",
+    "psutil>=6.0",
+]
+
+[project.optional-dependencies]
+# CUDA runtime for NVIDIA GPUs. Required for device="cuda".
+# On Blackwell (sm_120, RTX 50xx) only compute_type="float16" works —
+# CTranslate2 disables INT8 on sm_120 (release 4.6.2).
+gpu = [
+    "nvidia-cublas-cu12>=12.8",
+    "nvidia-cudnn-cu12>=9.7",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "ruff>=0.6",
+]
+build = [
+    "pyinstaller>=6.10",
+]
+
+[project.scripts]
+livetranscriber = "app.main:main"
+
+[project.urls]
+Homepage = "https://github.com/lollo/LiveTranscriber"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "RET", "SIM"]
+ignore = ["E501"]

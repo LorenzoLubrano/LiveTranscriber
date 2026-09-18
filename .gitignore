@@ -1,0 +1,42 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Application data — never commit models, recordings or logs
+models/
+Models/
+recordings/
+Recordings/
+logs/
+cache/
+*.log
+
+# Whisper / HuggingFace caches
+.cache/
+hf_cache/
+
+# Audio & transcript artifacts from local testing
+*.wav
+*.srt
+*.vtt
+scripts/out/
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
