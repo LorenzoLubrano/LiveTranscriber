@@ -45,6 +45,13 @@ def _install_exception_hook(app) -> None:
 
 
 def main() -> int:
+    # Checked before Qt starts: the diagnostic must still run when something
+    # about the GUI itself is broken.
+    if "--selftest" in sys.argv:
+        from app.selftest import main as selftest_main
+
+        return selftest_main(show_dialog="--quiet" not in sys.argv)
+
     ensure_app_dirs()
     log_path = setup_logging()
 
