@@ -102,6 +102,24 @@ class TranscriptionSettings:
 
 
 @dataclass(frozen=True)
+class Word:
+    """One word with its own timing.
+
+    Word timings are what make reliable streaming possible: they give an exact,
+    safe point to cut a hypothesis, so text can be confirmed without waiting for
+    a whole segment to settle.
+    """
+
+    start: float
+    end: float
+    text: str
+    probability: float = 1.0
+
+    def shifted(self, offset: float) -> Word:
+        return Word(self.start + offset, self.end + offset, self.text, self.probability)
+
+
+@dataclass(frozen=True)
 class Segment:
     """One transcribed span of audio."""
 
@@ -111,6 +129,7 @@ class Segment:
     no_speech_prob: float = 0.0
     avg_logprob: float = 0.0
     compression_ratio: float = 0.0
+    words: tuple[Word, ...] = ()
 
     @property
     def duration(self) -> float:
@@ -125,6 +144,7 @@ class Segment:
             no_speech_prob=self.no_speech_prob,
             avg_logprob=self.avg_logprob,
             compression_ratio=self.compression_ratio,
+            words=tuple(w.shifted(offset) for w in self.words),
         )
 
 
@@ -404,6 +424,16 @@ def _collect(raw_segments: Iterable, offset: float) -> list[Segment]:
         text = (seg.text or "").strip()
         if not text:
             continue
+        words = tuple(
+            Word(
+                start=float(w.start) + offset,
+                end=float(w.end) + offset,
+                # faster-whisper keeps the leading space that joins words.
+                text=str(w.word),
+                probability=float(getattr(w, "probability", 1.0) or 0.0),
+            )
+            for w in (getattr(seg, "words", None) or [])
+        )
         out.append(
             Segment(
                 start=float(seg.start) + offset,
@@ -412,6 +442,7 @@ def _collect(raw_segments: Iterable, offset: float) -> list[Segment]:
                 no_speech_prob=float(getattr(seg, "no_speech_prob", 0.0) or 0.0),
                 avg_logprob=float(getattr(seg, "avg_logprob", 0.0) or 0.0),
                 compression_ratio=float(getattr(seg, "compression_ratio", 0.0) or 0.0),
+                words=words,
             )
         )
     return out
