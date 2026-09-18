@@ -64,16 +64,19 @@ Consequences, encoded as hard rules in `app/transcription/engine.py`:
 
 ## Milestone 1 — Environment & scaffold
 
-- [ ] Project tree under `%USERPROFILE%\Desktop\LiveTranscriber`
-- [ ] `.venv` on Python 3.13
-- [ ] Core dependencies installed and importable
-- [ ] `pyproject.toml`, `.gitignore`, `LICENSE` (MIT), `README.md`
-- [ ] `git init` + first commit
-- [ ] `app/utils/paths.py` — application data directories
-- [ ] `app/utils/logging_setup.py` — rotating log, no transcript content
+- [x] Project tree under `%USERPROFILE%\Desktop\LiveTranscriber`
+- [x] `.venv` on Python 3.13
+- [x] Core dependencies installed and importable
+- [x] `pyproject.toml`, `.gitignore`, `LICENSE` (MIT), `README.md`
+- [x] `git init` + first commit
+- [x] `app/utils/paths.py` — application data directories
+- [x] `app/utils/logging_setup.py` — rotating log, no transcript content
 
 **Done when:** `python -c "import PySide6, faster_whisper, pyaudiowpatch, soxr"`
 succeeds inside the venv and the repo has its first commit.
+
+**Verified 2026-09-18.** All 9 core imports resolve; WASAPI host API reports 6
+devices; repo initialised with 8 logical commits; `ruff check` clean.
 
 ---
 
@@ -81,30 +84,50 @@ succeeds inside the venv and the repo has its first commit.
 
 Everything above the audio layer is worthless if this is not solid.
 
-- [ ] `app/audio/devices.py` — WASAPI enumeration
+- [x] `app/audio/devices.py` — WASAPI enumeration
   - host-API-aware; loopback devices matched to their render endpoint
   - stable device identity across replug (name + host API + channel signature)
   - de-duplication of the repeated WASAPI entries PortAudio reports
   - default input / default output resolution
-- [ ] `app/audio/resampler.py` — `soxr` wrapper, any rate → 16 kHz mono float32
+- [x] `app/audio/resampler.py` — `soxr` wrapper, any rate → 16 kHz mono float32
   - stateful streaming resampler (no clicks at chunk boundaries)
   - stereo/multi-channel → mono downmix
-- [ ] `app/audio/ring_buffer.py` — bounded lock-free-ish float32 ring buffer
+- [x] `app/audio/ring_buffer.py` — bounded lock-free-ish float32 ring buffer
   - fixed capacity, overwrite-oldest, explicit overflow counter
-- [ ] `app/audio/capture.py` — one `CaptureStream` per source
+- [x] `app/audio/capture.py` — one `CaptureStream` per source
   - callback does **only** `bytes → ring buffer` + a level meter update
   - no allocation, no resampling, no I/O in the callback
   - device-lost detection → signal, never an exception in the callback
-- [ ] `app/audio/loopback.py` — WASAPI loopback for PC audio
-- [ ] `app/audio/microphone.py` — WASAPI/MME microphone
-- [ ] `app/audio/recorder.py` — streaming WAV writer
+- [x] `app/audio/loopback.py` — WASAPI loopback for PC audio
+- [x] `app/audio/microphone.py` — WASAPI/MME microphone
+- [x] `app/audio/recorder.py` — streaming WAV writer
   - writes incrementally to disk, flushes periodically (crash-safe)
   - `pc_audio.wav`, `microphone.wav`, and a mixed track when both are active
-- [ ] `tests/` — ring buffer, resampler, WAV writer, device de-duplication
-- [ ] `scripts/audio_test.py` — real-hardware diagnostic (spec §22)
+- [x] `tests/` — ring buffer, resampler, WAV writer, device de-duplication
+- [x] `scripts/audio_test.py` — real-hardware diagnostic (spec §22)
 
 **Done when:** `scripts/audio_test.py` records 10 s of real PC audio and 10 s of
 real microphone, writes valid WAVs, and reports non-silent RMS for both.
+
+**Verified 2026-09-18 on the target machine.**
+
+`scripts/audio_test.py --both --seconds 10`:
+
+| | PC (loopback) | Microphone |
+|---|---|---|
+| device | Speakers (Realtek) 48 kHz 2ch | Mic Array (Realtek) 48 kHz 2ch |
+| callbacks | 475 | 470 |
+| captured | 10.13 s | 10.03 s |
+| **dropped frames** | **0 (0.00%)** | **0 (0.00%)** |
+| **overflows** | **0** | **0** |
+| RMS | −11.2 dBFS | −32.5 dBFS |
+
+Three valid WAVs written. Frequency check on the output files: a 440 Hz tone
+played through the speakers came back as **439.9 Hz** in both `pc_audio.wav` and
+`mixed.wav` — the loopback chain reproduces what Windows plays, at the right
+rate, with no drift.
+
+Automated coverage: 123 tests, all passing, `ruff` clean.
 
 ---
 
