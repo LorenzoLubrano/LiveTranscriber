@@ -133,10 +133,48 @@ Automated coverage: 123 tests, all passing, `ruff` clean.
 
 ## Milestone 3 — Whisper engine (offline)
 
-- [ ] `app/transcription/models.py` — catalogue, sizes, download + progress, offline check
-- [ ] `app/transcription/engine.py` — device/compute selection, warm-up, CPU fallback
-- [ ] `scripts/whisper_test.py` — WAV → transcript, CPU and GPU, timed
-- [ ] Benchmark: real-time factor for tiny/base/small/medium on this machine
+- [x] `app/transcription/hardware.py` — GPU detection, compute-type selection
+- [x] `app/transcription/cuda_setup.py` — make pip-installed CUDA DLLs loadable
+- [x] `app/transcription/models.py` — catalogue, sizes, download + progress, offline check
+- [x] `app/transcription/engine.py` — device/compute selection, warm-up, CPU fallback
+- [x] `scripts/whisper_test.py` — WAV → transcript, CPU and GPU, timed
+- [x] Benchmark: real-time factor on this machine
+
+**Verified 2026-09-18 on the target machine.**
+
+`scripts/whisper_test.py --benchmark`, on an 11.0 s Italian speech sample:
+
+| model | device | load | inference | RTF | words |
+|---|---|---|---|---|---|
+| tiny  | cuda/float16 | 0.61 s | 0.26 s | **41.7x** | 75% |
+| tiny  | cpu/int8     | 0.44 s | 0.29 s | **38.1x** | 75% |
+| small | cuda/float16 | 0.79 s | 0.39 s | **28.4x** | 85% |
+| small | cpu/int8     | 1.90 s | 1.47 s | **7.5x**  | 85% |
+
+Real-time needs RTF > 1. Even **CPU + small reaches 7.5x**, so this machine
+runs the recommended model live without a GPU; the GPU gives ~4x more headroom.
+
+The test script synthesises its own speech through the Windows speech engine
+(Italian and English voices are installed), so it needs no recording.
+
+### Two problems found and fixed here
+
+1. **`cublas64_12.dll is not found`.** The pip CUDA wheels put their DLLs in
+   `site-packages/nvidia/*/bin`, and since Python 3.8 Windows ignores `PATH`
+   for extension-module dependencies. `cuda_setup.py` registers those
+   directories with `os.add_dll_directory()` before any CUDA work. Without it
+   the GPU path cannot work at all on Windows.
+2. **A broken GPU stalled instead of failing.** `WhisperModel(device="cuda")`
+   constructs without touching cuBLAS, so a missing DLL only surfaced later.
+   Warm-up failures on GPU now re-raise and trigger the CPU fallback at load
+   time, rather than hanging once the user has pressed Start.
+
+### Useful discovery for Milestone 4
+
+faster-whisper **bundles `silero_vad_v6.onnx` (1.2 MB)** and exposes
+`get_speech_timestamps`, `VadOptions` and `collect_chunks`. Milestone 4 reuses
+it instead of downloading a separate VAD model — one less download, and it
+works offline out of the box.
 
 ## Milestone 4 — Real-time pipeline
 

@@ -107,6 +107,21 @@ required**. Then confirm the driver is present:
 nvidia-smi
 ```
 
+### `Library cublas64_12.dll is not found or cannot be loaded`
+
+The CUDA libraries installed by pip live in `site-packages/nvidia/*/bin`, and
+Windows does not search there for DLLs. LiveTranscriber registers those
+directories at startup, so this should not happen — if it does, confirm the GPU
+extra is installed:
+
+```powershell
+pip install -e ".[gpu]"
+python -c "from app.transcription.cuda_setup import describe; print(describe())"
+```
+
+That prints the directories it found. An empty list means the CUDA packages are
+not installed in the environment you are running.
+
 ### `CUBLAS_STATUS_NOT_SUPPORTED` on an RTX 50-series card
 
 Blackwell GPUs (sm_120) do not support CTranslate2's INT8 kernels — CTranslate2
