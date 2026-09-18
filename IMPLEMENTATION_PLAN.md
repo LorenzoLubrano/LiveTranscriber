@@ -229,7 +229,63 @@ keep up at all.
 So the quality presets are hardware-aware (`models.recommend_model`), and a
 one-shot benchmark must never be used to choose a live model.
 
-## Milestone 5 — GUI (PySide6; `frontend-design` skill here)
+## Milestone 5 — GUI (PySide6)
+
+- [x] `app/ui/theme.py` — design tokens, light/dark/system, Qt stylesheet
+- [x] `app/ui/widgets/level_meter.py` — segmented meter, peak hold, record dot
+- [x] `app/ui/widgets/transcript_view.py` — the reading surface
+- [x] `app/ui/main_window.py` — idle/recording shape change, transport, search
+- [x] `app/ui/settings_window.py` — general / advanced / privacy
+- [x] `app/ui/download_dialog.py` — model download off the GUI thread
+- [x] `app/config/settings.py` — QSettings persistence
+- [x] `app/sessions/session.py` — the controller wiring audio to transcription
+- [x] `app/main.py` — entry point
+
+### The design in one line each
+
+* **Two materials.** The control strip is an instrument: compact, dense, glanced
+  at from across a desk. The transcript is a page: a reading serif at a generous
+  line height, because a two-hour lecture is a document, not a log.
+* **The window changes shape.** Idle is setup-shaped; recording collapses the
+  pickers to one summary line and gives everything to the transcript.
+* **One saturated colour.** The level meter, green through amber to red as on any
+  hardware meter, plus the red record dot. Nothing else is coloured, so the two
+  things that mean "it is working" are the only things competing for attention.
+* **Provisional text is visibly unsettled** — dimmed and italic, resolving into
+  full-contrast upright text when confirmed. This is the one place boldness is
+  spent, because watching it settle explains the product better than any label.
+
+### Verified 2026-09-18, end to end through the real GUI
+
+Press Start, speak to the speakers, watch text appear, pause, resume, stop:
+
+```
+premo Avvia registrazione
+sessione attiva -> .../Recordings/2026-09-18_10-29_Lezione QCED
+testo dopo la prima frase: 14 parole      <- text during recording
+metto in PAUSA / stato = paused / riprendo
+premo Termina
+  audio.wav  828.7 KB   26.5s @ 16000 Hz
+  segmenti: 6   parole: 29
+```
+
+### Three bugs found only by running it
+
+1. **The GUI showed nothing while recording worked perfectly.**
+   `RecordingSession.__init__` did `self.transcript = transcript or Transcript()`.
+   `Transcript.__bool__` means "has segments", so an **empty transcript is
+   falsy** and the caller's object was silently replaced. The session filled its
+   own copy — the log said "6 segments" while the window sat empty. Now tested
+   for explicitly.
+2. **Double spaces at every join.** The provisional anchor sat *after* the
+   separating space, so clearing provisional text left the space and the next
+   confirmed chunk added another.
+3. **A band of window colour across every panel**, because Qt's `QWidget` rule
+   paints labels too; and the level meter collapsed to a few pixels because an
+   Expanding child inside a Preferred parent has no width to claim.
+
+317 tests passing, `ruff` clean.
+
 
 ## Milestone 6 — Sessions, export, autosave, recovery
 

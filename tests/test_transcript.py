@@ -373,3 +373,43 @@ def test_concurrent_writers_lose_nothing(transcript):
 
     assert all(not t.is_alive() for t in threads)
     assert len(transcript) == 400
+
+
+# -- the falsy-object trap -------------------------------------------------
+
+
+def test_empty_transcript_is_falsy_but_not_none(transcript):
+    """Transcript.__bool__ means "has segments", which is a trap for callers.
+
+    `x or Transcript()` silently discards a caller's empty transcript. The
+    session used to do exactly that, so the GUI watched an object nothing ever
+    wrote to while recording worked perfectly. Anything accepting a Transcript
+    must test `is not None`.
+    """
+    assert not transcript
+    assert transcript is not None
+
+    replaced = transcript or Transcript()
+    assert replaced is not transcript, "this is the trap being documented"
+
+    kept = transcript if transcript is not None else Transcript()
+    assert kept is transcript
+
+
+def test_session_keeps_the_transcript_it_is_given():
+    """The regression that produced an empty GUI during a working recording."""
+    from app.sessions.session import RecordingSession, SessionConfig
+
+    shared = Transcript()
+    session = RecordingSession(SessionConfig(), transcript=shared)
+    assert session.transcript is shared
+
+    shared.add(Source.PC, 0.0, 1.0, "scritto dalla pipeline")
+    assert len(session.transcript) == 1
+
+
+def test_session_still_creates_one_when_given_none():
+    from app.sessions.session import RecordingSession, SessionConfig
+
+    session = RecordingSession(SessionConfig())
+    assert isinstance(session.transcript, Transcript)
