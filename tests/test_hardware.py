@@ -169,3 +169,59 @@ def test_describe_hardware_runs_on_any_machine():
     text = describe_hardware()
     assert "CPU:" in text
     assert "GPU:" in text
+
+
+# -- describing the choice to a human --------------------------------------
+
+
+def test_a_cpu_only_pc_is_not_told_something_is_missing(monkeypatch):
+    """The message a machine with no NVIDIA card must NOT see.
+
+    Telling someone their PC "does not include the CUDA libraries" when it has
+    no NVIDIA card invites them to go looking for a fix that does not exist.
+    """
+    from app.transcription import hardware
+
+    monkeypatch.setattr(hardware, "detect_gpus", lambda: [])
+    choice = hardware.AcceleratorChoice(device="cpu", compute_type="int8", cpu_threads=6)
+    assert hardware.describe_choice(choice) == "CPU (6 thread)"
+
+
+def test_an_nvidia_pc_on_the_cpu_build_is_told_where_to_look(monkeypatch):
+    from app.transcription import hardware
+
+    gpu = hardware.GpuInfo(0, "NVIDIA GeForce RTX 5050 Laptop GPU", 12.0, 8151, 7000)
+    monkeypatch.setattr(hardware, "detect_gpus", lambda: [gpu])
+    monkeypatch.setattr(
+        "app.transcription.cuda_setup.cuda_libraries_available", lambda: False
+    )
+    choice = hardware.AcceleratorChoice(device="cpu", compute_type="int8", cpu_threads=6)
+    text = hardware.describe_choice(choice)
+    assert "RTX 5050 Laptop" in text
+    assert "versione per NVIDIA" in text
+
+
+def test_a_gpu_choice_names_the_card_and_the_precision():
+    from app.transcription import hardware
+
+    gpu = hardware.GpuInfo(0, "NVIDIA GeForce RTX 5050 Laptop GPU", 12.0, 8151, 7000)
+    choice = hardware.AcceleratorChoice(
+        device="cuda", compute_type="float16", gpu=gpu, cpu_threads=6
+    )
+    assert hardware.describe_choice(choice) == "GPU NVIDIA RTX 5050 Laptop, float16"
+
+
+def test_gpu_is_not_offered_when_there_is_no_card(monkeypatch):
+    from app.transcription import hardware
+
+    monkeypatch.setattr(hardware, "detect_gpus", lambda: [])
+    availability = hardware.gpu_availability()
+    assert not availability.usable
+    assert "funziona comunque sulla CPU" in availability.reason
+
+
+def test_avx2_detection_answers_without_raising():
+    from app.transcription.hardware import cpu_supports_avx2
+
+    result = cpu_supports_avx2()
+    assert result is None or isinstance(result, bool)

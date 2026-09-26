@@ -315,6 +315,91 @@ def select_accelerator(
     )
 
 
+# --------------------------------------------------------------------------
+# What the CPU can do, and how to say it
+# --------------------------------------------------------------------------
+
+#: ``PF_AVX2_INSTRUCTIONS_AVAILABLE`` from Windows' ``processthreadsapi.h``.
+_PF_AVX2 = 40
+
+
+def cpu_supports_avx2() -> bool | None:
+    """Whether this CPU has AVX2. None when it cannot be determined.
+
+    CTranslate2 runs without AVX2 — it dispatches down to SSE — but the INT8
+    kernels the CPU path depends on lose most of their speed, and a pre-2013
+    machine ends up several times slower than the measurements anywhere in this
+    project. Worth reporting, because the symptom ("it is unusably slow") looks
+    identical to a fault.
+
+    Asked of Windows rather than parsed out of a CPU name: ``IsProcessorFeaturePresent``
+    is the supported way and needs no dependency.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(_PF_AVX2))
+    except Exception as exc:  # pragma: no cover - depends on the host
+        logger.info("Could not query CPU features: %r", exc)
+        return None
+
+
+@dataclass(frozen=True)
+class GpuAvailability:
+    """Whether choosing "GPU" could work at all on this machine and build."""
+
+    usable: bool
+    reason: str = ""
+
+
+def gpu_availability() -> GpuAvailability:
+    """Why the GPU option is, or is not, worth offering.
+
+    Two independent things have to be true: a usable NVIDIA card, and the CUDA
+    runtime libraries in this build. Offering the choice when either is missing
+    produces a setting that silently does nothing.
+    """
+    from app.transcription.cuda_setup import cuda_libraries_available
+
+    gpus = detect_gpus()
+    if not gpus:
+        return GpuAvailability(
+            False,
+            "Nessuna GPU NVIDIA utilizzabile su questo PC. La trascrizione "
+            "funziona comunque sulla CPU.",
+        )
+    if not cuda_libraries_available():
+        return GpuAvailability(
+            False,
+            f"{gpus[0].short_name} rilevata, ma questa versione non include le "
+            "librerie CUDA. Scarica la versione per NVIDIA per usarla.",
+        )
+    return GpuAvailability(True, f"{gpus[0].short_name} pronta all'uso.")
+
+
+def describe_choice(choice: AcceleratorChoice) -> str:
+    """One honest line about where transcription runs, and why.
+
+    Both the status chip and the diagnostics need this, and they used to work it
+    out separately — which is how a PC with no NVIDIA card at all ended up being
+    told that "CUDA libraries are not included", as though something were
+    missing from it.
+    """
+    if choice.is_gpu and choice.gpu is not None:
+        return f"GPU NVIDIA {choice.gpu.short_name}, {choice.compute_type}"
+
+    threads = f"{choice.cpu_threads} thread" if choice.cpu_threads else "thread automatici"
+    availability = gpu_availability()
+    if availability.usable:
+        # A usable GPU that is not being used: the user asked for CPU.
+        return f"CPU ({threads}), impostata a mano"
+    if detect_gpus():
+        return f"CPU ({threads}) — {availability.reason}"
+    return f"CPU ({threads})"
+
+
 def describe_hardware() -> str:
     """Multi-line hardware summary for logs, About and the benchmark."""
     import platform

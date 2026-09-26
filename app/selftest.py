@@ -146,23 +146,26 @@ def _check_vad(report: Report) -> None:
 
 def _check_hardware(report: Report) -> None:
     try:
-        from app.transcription.cuda_setup import cuda_libraries_available
-        from app.transcription.hardware import Accelerator, detect_gpus, select_accelerator
+        from app.transcription.hardware import (
+            Accelerator,
+            cpu_supports_avx2,
+            describe_choice,
+            select_accelerator,
+        )
 
         choice = select_accelerator(Accelerator.AUTO)
-        gpus = detect_gpus()
+        report.add("Elaborazione", True, describe_choice(choice))
 
-        if choice.is_gpu:
-            detail = f"GPU {choice.gpu.short_name}, {choice.compute_type}"
-        elif gpus and not cuda_libraries_available():
-            detail = (
-                f"{gpus[0].short_name} rilevata, ma questa versione non include "
-                f"le librerie CUDA. Verra' usata la CPU ({choice.cpu_threads} thread)."
+        # Only worth reporting when it is missing, and only when the CPU is what
+        # the work will actually run on.
+        if not choice.is_gpu and cpu_supports_avx2() is False:
+            report.add(
+                "Istruzioni CPU",
+                False,
+                "questa CPU non ha AVX2",
+                "La trascrizione funziona ma e' molto piu' lenta. Usa il "
+                "modello Tiny e non aspettarti il tempo reale.",
             )
-        else:
-            detail = f"CPU, {choice.cpu_threads} thread"
-
-        report.add("Elaborazione", True, detail)
     except Exception as exc:
         report.add("Elaborazione", False, f"{type(exc).__name__}: {exc}")
 
@@ -185,16 +188,62 @@ def _check_models(report: Report) -> None:
         return []
 
 
-def _check_transcription(report: Report, installed) -> None:
-    """The real proof: load a model and transcribe a synthetic signal."""
-    if not installed:
-        report.add(
-            "Trascrizione", False, "nessun modello disponibile per la prova",
-            "Scarica un modello dall'app, poi ripeti la diagnostica.",
-        )
-        return
+def _pick_model(installed) -> str:
+    """The model the app would really use, so the checks test the real case.
 
-    key = min(installed, key=lambda s: s.approx_size_mb).key
+    The configured one when it is on disk, otherwise the smallest installed:
+    diagnosing the model the user has selected is the whole point, and testing
+    a different one would answer a question nobody asked.
+    """
+    smallest = min(installed, key=lambda s: s.approx_size_mb).key
+    try:
+        from app.config.settings import AppSettings
+
+        configured = AppSettings.load().model
+    except Exception:
+        return smallest
+    return configured if any(s.key == configured for s in installed) else smallest
+
+
+def _check_speed(report: Report, key: str) -> None:
+    """Measure whether this machine can keep up, live.
+
+    The single most useful line in the whole report for someone whose app "is
+    slow": it separates a machine that is too slow for the chosen model from one
+    that is broken, and those two have completely different fixes.
+    """
+    try:
+        from app.transcription.calibration import CalibrationError, measure_streaming_cost
+
+        try:
+            measured = measure_streaming_cost(key, target_seconds=12.0)
+        except CalibrationError as exc:
+            report.add("Velocita'", True, f"non misurabile: {exc.user_message}")
+            return
+
+        if not measured.is_usable:
+            report.add(
+                "Velocita'", False, "la misura non ha prodotto alcuna inferenza",
+                "Il rilevamento della voce o il modello non stanno funzionando.",
+            )
+            return
+
+        report.add(
+            "Velocita'",
+            measured.verdict.value != "too_slow",
+            f"{key}: {measured.headroom:.1f}x il tempo reale ({measured.verdict.label})"
+            + ("; con PC e microfono insieme il costo raddoppia"
+               if measured.verdict_for(2).value == "too_slow"
+               and measured.verdict.value != "too_slow" else ""),
+            "Questo modello e' troppo pesante per questo PC: scegline uno piu' "
+            "leggero, altrimenti il testo arriva con molto ritardo.",
+        )
+    except Exception as exc:
+        report.add("Velocita'", False, f"{type(exc).__name__}: {exc}")
+
+
+def _check_transcription(report: Report, key: str) -> None:
+    """The real proof: load a model and transcribe a synthetic signal."""
     try:
         from app.transcription.engine import TranscriptionEngine, TranscriptionSettings
 
@@ -235,7 +284,15 @@ def run(write_to: Path | None = None) -> Report:
     _check_vad(report)
     _check_hardware(report)
     installed = _check_models(report)
-    _check_transcription(report, installed)
+    if installed:
+        key = _pick_model(installed)
+        _check_transcription(report, key)
+        _check_speed(report, key)
+    else:
+        report.add(
+            "Trascrizione", False, "nessun modello disponibile per la prova",
+            "Scarica un modello dall'app, poi ripeti la diagnostica.",
+        )
 
     if write_to is not None:
         try:
