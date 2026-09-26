@@ -54,7 +54,7 @@ build = [
 livetranscriber = "app.main:main"
 
 [project.urls]
-Homepage = "https://github.com/lollo/LiveTranscriber"
+Homepage = "https://github.com/LorenzoLubrano/LiveTranscriber"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

@@ -16,7 +16,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done & verified
 | RAM | 15.3 GB |
 | GPU | NVIDIA GeForce RTX 5050 Laptop (8 GB, **Blackwell sm_120**), driver 596.13, CUDA 13.2 |
 | iGPU | AMD Radeon 780M (not used for inference) |
-| Python | 3.13.13 (`C:\Users\lollo\AppData\Local\Programs\Python\Python313`) |
+| Python | 3.13.13 (per-user install) |
 | Git | 2.52.0 |
 | FFmpeg | **not installed** — not required (see §2) |
 | Disk free | 329 GB |
@@ -342,12 +342,80 @@ Real recording, then a simulated crash:
 A previous completed recording next to the crashed one is provably untouched,
 and *Ignora* stops the prompt without deleting anything.
 
-389 tests passing, `ruff` clean.
+410 tests passing (24 hardware tests deselected), `ruff` clean.
 
 
-## Milestone 7 — Robustness (2–4 h soak test, RAM/handle/VRAM checks)
+## Milestone 7 — Robustness
 
-## Milestone 8 — Packaging (`scripts/build_windows.ps1`, portable folder)
+- [x] `scripts/soak_test.py` — long-run harness, accelerated or real time
+- [x] RAM, handle, thread and VRAM growth measured per component
+- [x] `app/sessions/keepup.py` — detect and mitigate a machine that cannot keep up
+- [x] `app/transcription/calibration.py` — measure this machine instead of guessing
+- [ ] 2 h real-time soak (thermal behaviour) — **not yet completed**
+
+### What the accelerated soak found (4 simulated hours per component)
+
+| | initial | typical | growth per hour |
+|---|---|---|---|
+| Transcript store | 36 MB | 39 MB | +1.1 MB |
+| Qt document | 56 MB | 60 MB | +1.0 MB |
+| Full pipeline | 655 MB | 783 MB (plateau) | flat |
+| Handles | 304 | 336 | +0.1 |
+| VRAM | 1105 MB | 1110 MB | +12 MB |
+
+No leak. The Qt document reached 291k characters with append time *falling* from
+0.08 ms to 0.03 ms, so the suspected quadratic relayout does not happen. Autosave
+went from 3.2 ms to 12.6 ms, which is inherent to rewriting the whole file and
+still irrelevant at that scale.
+
+Two findings about the test itself, both worth recording:
+
+* **The first version was green and measured nothing.** It fed a tone plus noise,
+  which sounds speech-shaped but is not speech: Silero rejected every block, so
+  Whisper never ran and memory was flat because nothing happened. It now uses real
+  synthesised speech, and the report *fails* a run that produced no transcription.
+* **A two-point slope lied about memory.** Windows trims working sets under
+  pressure — 784 MB to 131 MB in one case — which two points reported as
+  "−350 MB/hour of growth". Replaced with a least-squares fit plus plateau and
+  peak.
+
+### The failure this milestone was really about
+
+A model too slow for the machine used to degrade silently. Measured with `small`
+on this CPU, paced in real time: **21 s mean latency at 60 s of audio, 31 s at
+90 s, peaks near 90 s** — and nothing said why. The ring buffer was also only
+30 s deep while being drained solely between inference passes, and one pass over
+the full 28 s streaming buffer measured 19.3 s with `large-v3`: a margin of 1.5x
+that a slower CPU erases, after which recorded audio is lost silently.
+
+Both are now handled — see the keep-up guard and the 60 s ring — and the app
+measures the machine so it does not choose an impossible model in the first place.
+
+
+## Milestone 8 — Packaging
+
+- [x] `scripts/LiveTranscriber.spec` — one-dir bundle, ~45 unused Qt modules excluded
+- [x] `scripts/build_windows.ps1` — tests, build, licences, archive
+- [x] Two variants: any-PC (329 MB, 127 MB zipped) and NVIDIA (2335 MB, 1.41 GiB zipped)
+- [x] `app/selftest.py` — `--selftest` from the packaged build
+- [x] Both packaged builds verified on this machine
+- [x] GitHub Actions running lint plus the non-hardware suite on `windows-latest`
+
+Verified from the packaged executables, not from source:
+
+```
+LiveTranscriber\LiveTranscriber.exe --selftest
+  Elaborazione : CPU (6 thread) - RTX 5050 rilevata, ma questa versione non
+                 include le librerie CUDA. Scarica la versione per NVIDIA.
+  Velocita'    : small: 1.1x il tempo reale (troppo lento)   <- correctly flagged
+
+LiveTranscriber-GPU\LiveTranscriber.exe --selftest
+  Elaborazione : GPU NVIDIA RTX 5050 Laptop, float16
+  Velocita'    : small: 6.4x il tempo reale (va bene)
+```
+
+The NVIDIA archive at 1.41 GiB fits under GitHub's 2 GiB per-asset limit; the
+build script checks and warns if a future change pushes it over.
 
 ---
 
