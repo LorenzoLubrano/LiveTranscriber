@@ -22,7 +22,9 @@ from app.audio.ring_buffer import RingBuffer
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUFFER_SECONDS = 30.0
+#: See :data:`app.audio.loopback.DEFAULT_BUFFER_SECONDS` for why this is 60 s:
+#: the ring has to hold everything that arrives during one inference pass.
+DEFAULT_BUFFER_SECONDS = 60.0
 
 
 def resolve_microphone_device(preferred: AudioDevice | None = None) -> AudioDevice:

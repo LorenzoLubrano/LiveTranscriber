@@ -36,6 +36,7 @@ from app.audio.resampler import TARGET_SAMPLE_RATE, StreamResampler
 from app.export import export_all
 from app.export.json_export import SessionRecord
 from app.sessions.autosave import Autosave
+from app.sessions.keepup import KeepUpMonitor, Level
 from app.sessions.transcript import Source, Transcript, TranscriptStats
 from app.transcription.engine import TranscriptionEngine, TranscriptionSettings
 from app.transcription.hardware import Accelerator
@@ -48,6 +49,14 @@ from app.transcription.vad import VadSettings
 from app.utils.paths import default_recordings_dir, unique_session_dir
 
 logger = logging.getLogger(__name__)
+
+#: Longest interval between inference passes the mitigation will grow to.
+#: Beyond this, the wait for text becomes worse than the backlog it fixes.
+MAX_CHUNK_DURATION_S = 8.0
+
+#: Seconds of audio to wait before widening the interval again, so one bad
+#: stretch does not walk the interval straight to the cap.
+CHUNK_WIDEN_COOLDOWN_S = 45.0
 
 
 class InputMode(StrEnum):
@@ -189,6 +198,12 @@ class _SourcePipeline:
         self._stop = threading.Event()
         self._paused = threading.Event()
 
+        self.keepup = KeepUpMonitor()
+        #: Stream position of the last interval widening. Starts before the
+        #: beginning of time so the first one is never held back by the cooldown.
+        self._widened_at = float("-inf")
+        self._reported_overflow = False
+
     # -- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
@@ -231,6 +246,7 @@ class _SourcePipeline:
         try:
             while not self._stop.is_set():
                 self._drain()
+                self._check_overflow()
                 if self._paused.is_set():
                     time.sleep(0.05)
                     continue
@@ -271,6 +287,7 @@ class _SourcePipeline:
             self.transcriber.feed(audio)
 
     def _transcribe(self) -> None:
+        started = time.monotonic()
         try:
             update = self.transcriber.process()
         except Exception as exc:
@@ -279,8 +296,101 @@ class _SourcePipeline:
                 getattr(exc, "user_message", "Errore durante la trascrizione.")
             )
             return
+
+        # The whole pass, not just the model's own timing: the VAD, the
+        # hypothesis buffer and the copies are all time the ring buffer spends
+        # filling up with nobody draining it.
+        self._check_keeping_up(time.monotonic() - started)
+
         if update is not None and update.has_content:
             self._publish(update)
+
+    # -- keeping up -------------------------------------------------------
+
+    def _check_keeping_up(self, elapsed: float) -> None:
+        """React when inference is slower than the audio arriving.
+
+        Two things happen, in this order: the work per second of audio is
+        reduced, and the user is told once. Reducing the work first means the
+        message arrives alongside a machine that has already stopped getting
+        worse, instead of one still sliding.
+
+        The model is never changed here. Loading another model mid-recording
+        would cost seconds of audio and silently change the quality of a
+        transcript in progress — that is the user's decision to make.
+        """
+        self.keepup.record(elapsed, self.transcriber.stream_position)
+
+        level = self.keepup.take_warning()
+        if level is None:
+            return
+
+        widened = self._widen_chunk()
+        if level is Level.OVERRUN:
+            message = (
+                "La trascrizione non riesce a stare al passo con l'audio su "
+                "questo PC. L'audio continua a essere registrato, ma il testo "
+                "arriva con molto ritardo: conviene fermarsi e scegliere un "
+                "modello più leggero."
+            )
+        else:
+            message = (
+                "Questo PC è al limite con il modello scelto. Il testo può "
+                "arrivare con qualche secondo di ritardo; con un modello più "
+                "leggero la trascrizione resta al passo."
+            )
+        if widened:
+            message += (
+                f" L'intervallo tra le elaborazioni è stato portato a "
+                f"{self.transcriber.streaming.chunk_duration:.0f}s per ridurre "
+                "il carico."
+            )
+        self.callbacks.warning(message)
+
+    def _widen_chunk(self) -> bool:
+        """Transcribe less often, so each second of audio costs less.
+
+        Streaming re-transcribes the working buffer on every pass, so the cost
+        per second of audio is roughly ``buffer / chunk_duration`` model runs.
+        Doubling the interval halves the work, and pays for it in latency —
+        which is the right trade when the alternative is unbounded latency.
+        """
+        position = self.transcriber.stream_position
+        if position - self._widened_at < CHUNK_WIDEN_COOLDOWN_S:
+            return False
+
+        streaming = self.transcriber.streaming
+        if streaming.chunk_duration >= MAX_CHUNK_DURATION_S:
+            return False
+
+        before = streaming.chunk_duration
+        streaming.chunk_duration = min(before * 2.0, MAX_CHUNK_DURATION_S)
+        self._widened_at = position
+        logger.info(
+            "Widened the chunk interval for %s: %.1fs -> %.1fs",
+            self.source.value,
+            before,
+            streaming.chunk_duration,
+        )
+        return True
+
+    def _check_overflow(self) -> None:
+        """Tell the user once if captured audio was actually dropped.
+
+        The ring buffer overwrites its oldest frames rather than blocking the
+        audio callback, so an overrun costs recorded audio and nothing else
+        notices. Counting it without ever saying so would hide the one failure
+        in this app that cannot be repaired afterwards.
+        """
+        if self._reported_overflow or self.stream.stats.frames_dropped == 0:
+            return
+        self._reported_overflow = True
+        lost = self.stream.stats.frames_dropped / max(1, self.stream.sample_rate)
+        self.callbacks.warning(
+            f"Il PC non è riuscito a seguire l'audio in ingresso e circa "
+            f"{lost:.0f}s di registrazione sono andati persi. Usa un modello "
+            "più leggero per il resto della registrazione."
+        )
 
     def _finish(self) -> None:
         try:

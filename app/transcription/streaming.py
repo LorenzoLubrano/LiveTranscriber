@@ -258,6 +258,15 @@ class StreamingTranscriber:
         return self._buffer.size / SAMPLE_RATE
 
     @property
+    def stream_position(self) -> float:
+        """Session time of the newest sample fed, in seconds of audio.
+
+        The denominator for any "is this machine keeping up" question: inference
+        has to cost less than the audio arriving, and this is that audio.
+        """
+        return self._stream_position
+
+    @property
     def average_latency(self) -> float:
         return sum(self._latencies) / len(self._latencies) if self._latencies else 0.0
 

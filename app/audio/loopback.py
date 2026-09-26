@@ -30,7 +30,15 @@ logger = logging.getLogger(__name__)
 #: Seconds of audio held in RAM per source before the oldest is dropped.
 #: The consumer normally drains this within milliseconds; the depth exists to
 #: absorb a slow Whisper window, not to store the recording.
-DEFAULT_BUFFER_SECONDS = 30.0
+#:
+#: The floor is the longest single inference pass, because the ring is drained
+#: only between passes (see :mod:`app.sessions.session`): anything that arrives
+#: during one has to fit here or it is lost before it reaches the WAV. Measured
+#: on the development CPU, one pass over the full 28 s streaming buffer takes
+#: 3.7 s with `small`, 11.5 s with `medium` and 19.3 s with `large-v3` — so 30 s
+#: left large-v3 a margin of 1.5x, which any slower CPU erases. 60 s costs
+#: 3.8 MB per source and removes the cliff.
+DEFAULT_BUFFER_SECONDS = 60.0
 
 
 def resolve_loopback_device(
