@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
 
         # Deferred so the window is painted before a modal appears over it;
         # asking about a crash against a grey rectangle looks like a second crash.
-        QTimer.singleShot(400, self.offer_recovery)
+        QTimer.singleShot(400, self._startup_prompts)
 
     # ------------------------------------------------------------------ UI
 
@@ -407,6 +407,14 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.setStyleSheet(stylesheet(self._palette))
         self.transcript_view.set_palette(self._palette)
+        # Text already in the document keeps the colours it was given when it
+        # was inserted, so changing theme mid-session left the transcript in the
+        # old ink — dark grey on a dark page, effectively invisible. Redrawing
+        # from the model is cheap next to how rarely a theme changes.
+        if self.transcript.segments:
+            self.transcript_view.rebuild(
+                self.transcript.segments, self.transcript.provisional
+            )
         self.record_dot.set_palette(self._palette)
         self.pc_meter.set_palette(self._palette)
         self.mic_meter.set_palette(self._palette)
@@ -974,6 +982,43 @@ class MainWindow(QMainWindow):
         if self.session is not None and self.session.directory:
             return self.session.directory
         return default_recordings_dir()
+
+    @Slot()
+    @Slot()
+    def _startup_prompts(self) -> None:
+        """First run, then recovery — in that order, never both at once.
+
+        A new user has nothing to recover, and a returning user has already made
+        the first-run choice, so in practice only one of these ever appears.
+        """
+        self.offer_first_run()
+        self.offer_recovery()
+
+    @Slot()
+    def offer_first_run(self) -> None:
+        """Ask what kind of transcription this is for, once (spec §25)."""
+        if self.app_settings.first_run_done:
+            return
+
+        from app.ui.first_run import FirstRunDialog
+
+        dialog = FirstRunDialog(self.app_settings, self)
+        accepted = dialog.exec() == FirstRunDialog.DialogCode.Accepted
+
+        if accepted and dialog.chosen_model:
+            self.select_model(dialog.chosen_model)
+            self.app_settings.model = dialog.chosen_model
+            if models.is_available(dialog.chosen_model):
+                self._offer_speed_check(dialog.chosen_model)
+            else:
+                # Downloading ends with the same speed offer.
+                self._download_model(dialog.chosen_model)
+
+        # Set last, and in both branches: the download path reads it to decide
+        # whether to offer the measurement, and a user who chose "later" must
+        # not be asked again on every launch.
+        self.app_settings.first_run_done = True
+        self.app_settings.save()
 
     @Slot()
     def offer_recovery(self) -> None:
