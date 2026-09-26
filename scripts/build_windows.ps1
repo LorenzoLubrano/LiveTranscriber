@@ -91,11 +91,17 @@ if ($Gpu) {
 # --------------------------------------------------------------------- tests
 
 if (-not $SkipTests) {
+    Write-Step 'Checking the code'
+    # The same command CI runs, over the same paths. Checking a narrower set
+    # locally is how a lint failure reached the repository once already.
+    & $Python -m ruff check $Root\app $Root\tests $Root\scripts
+    if ($LASTEXITCODE -ne 0) { throw 'Lint failed; not building a release.' }
+
     Write-Step 'Running the test suite'
     & $Python -m pytest $Root\tests -q -m "not hardware"
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed; not building a release.' }
 } else {
-    Write-Detail 'Tests skipped by request'
+    Write-Detail 'Tests and lint skipped by request'
 }
 
 # --------------------------------------------------------------------- clean
