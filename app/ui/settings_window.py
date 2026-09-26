@@ -179,7 +179,21 @@ class SettingsDialog(QDialog):
         self.accelerator_combo.addItem("Solo CPU", Accelerator.CPU)
         self.accelerator_combo.addItem("GPU NVIDIA", Accelerator.GPU)
         self._restrict_accelerator_choices()
-        form.addRow("Elaborazione", self.accelerator_combo)
+
+        accelerator_row = QHBoxLayout()
+        accelerator_row.addWidget(self.accelerator_combo, 1)
+        self.cuda_button = QPushButton("Attiva la GPU…")
+        self.cuda_button.clicked.connect(self._install_cuda_pack)
+        accelerator_row.addWidget(self.cuda_button)
+        accelerator_widget = QWidget()
+        accelerator_widget.setLayout(accelerator_row)
+        form.addRow("Elaborazione", accelerator_widget)
+
+        self.accelerator_hint = QLabel()
+        self.accelerator_hint.setObjectName("Hint")
+        self.accelerator_hint.setWordWrap(True)
+        form.addRow("", self.accelerator_hint)
+        self._sync_accelerator_hint()
 
         form.addRow(QLabel(""))
         self.models_label = QLabel(self._models_summary())
@@ -200,6 +214,42 @@ class SettingsDialog(QDialog):
         form.addRow("Velocità", speed_widget)
 
         return page
+
+    def _sync_accelerator_hint(self) -> None:
+        """Say where the work will run, and offer the fix when there is one."""
+        from app.transcription.hardware import gpu_availability
+
+        try:
+            availability = gpu_availability()
+        except Exception:
+            self.cuda_button.setVisible(False)
+            return
+
+        self.accelerator_hint.setText(availability.reason)
+        # The button exists only when pressing it would change something: a PC
+        # with no NVIDIA card has nothing to install, and one that already has
+        # the libraries has nothing to gain.
+        self.cuda_button.setVisible(availability.can_install)
+
+    @Slot()
+    def _install_cuda_pack(self) -> None:
+        from app.transcription.hardware import detect_gpus
+        from app.ui.cuda_dialog import CudaPackDialog
+
+        try:
+            name = detect_gpus()[0].short_name
+        except Exception:
+            name = ""
+
+        dialog = CudaPackDialog(name, self)
+        dialog.exec()
+        if not dialog.installed:
+            return
+
+        self._restrict_accelerator_choices()
+        self._sync_accelerator_hint()
+        if hasattr(self.main_window, "apply_settings"):
+            self.main_window.apply_settings()
 
     def _speed_summary(self) -> str:
         """What has been measured on this machine, if anything.

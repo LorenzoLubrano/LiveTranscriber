@@ -508,3 +508,45 @@ def test_changing_theme_redraws_the_transcript(qtbot):
     assert dark_inks != light_inks
     assert LIGHT.ink.lower() not in dark_inks
     assert DARK.ink.lower() in dark_inks
+
+
+# -- the NVIDIA support pack -----------------------------------------------
+
+
+def _availability(monkeypatch, usable: bool, can_install: bool):
+    from app.transcription.hardware import GpuAvailability
+
+    monkeypatch.setattr(
+        "app.transcription.hardware.gpu_availability",
+        lambda: GpuAvailability(usable, "motivo", can_install),
+    )
+
+
+def test_the_gpu_button_appears_only_when_it_would_do_something(qtbot, monkeypatch):
+    """Three machines, three different right answers.
+
+    A PC with no NVIDIA card has nothing to install; one that already has the
+    libraries has nothing to gain; only the third case is a button.
+    """
+    from app.ui.main_window import MainWindow
+    from app.ui.settings_window import SettingsDialog
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    _availability(monkeypatch, usable=False, can_install=False)   # no card
+    dialog = SettingsDialog(window)
+    qtbot.addWidget(dialog)
+    assert not dialog.cuda_button.isVisible()
+
+    _availability(monkeypatch, usable=True, can_install=False)    # already able
+    dialog = SettingsDialog(window)
+    qtbot.addWidget(dialog)
+    assert not dialog.cuda_button.isVisible()
+
+    _availability(monkeypatch, usable=False, can_install=True)    # card, no libs
+    dialog = SettingsDialog(window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog.cuda_button.isVisible()
+    assert dialog.accelerator_hint.text() == "motivo"

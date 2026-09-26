@@ -23,6 +23,18 @@ ROOT = SPEC_DIR.parent
 
 BUNDLE_CUDA = os.environ.get("LIVETRANSCRIBER_BUNDLE_CUDA", "0") == "1"
 
+# Only cuBLAS, measured rather than assumed. Listing every DLL that is actually
+# mapped during GPU transcription — real speech, three model architectures —
+# gives three files: cublasLt64_12.dll (638 MB), cublas64_12.dll (98 MB), and a
+# 300 KB cudnn64_9.dll that CTranslate2 ships inside its own package. The
+# nvidia-cudnn wheel, 1093 MB of it, is never touched, and `ctranslate2.dll`
+# names no cuDNN library at all in its imports.
+#
+# If some path ever does need it, loading the model on the GPU fails and the app
+# falls back to the CPU with a message, which is a handled failure rather than a
+# crash — and `--selftest` reports it immediately.
+CUDA_PACKAGES = ("cublas",)
+
 # Distinct output folders: building the GPU variant must never overwrite a CPU
 # build someone is already using.
 BUNDLE_NAME = "LiveTranscriber-GPU" if BUNDLE_CUDA else "LiveTranscriber"
@@ -74,10 +86,13 @@ if BUNDLE_CUDA:
     # exists. Reaching for __file__ here failed the whole GPU build with a
     # TypeError deep inside pathlib.
     nvidia_root = Path(list(nvidia.__path__)[0])
-    for dll in nvidia_root.rglob("*.dll"):
-        # Keep the nvidia/<pkg>/bin layout: cuda_setup.py looks for exactly
-        # that shape next to the executable when frozen.
-        binaries.append((str(dll), str(Path("nvidia") / dll.relative_to(nvidia_root).parent)))
+    for package in CUDA_PACKAGES:
+        for dll in (nvidia_root / package).rglob("*.dll"):
+            # Keep the nvidia/<pkg>/bin layout: cuda_setup.py looks for exactly
+            # that shape next to the executable when frozen.
+            binaries.append(
+                (str(dll), str(Path("nvidia") / dll.relative_to(nvidia_root).parent))
+            )
 
 # -- Qt modules this app never uses ----------------------------------------
 excluded_qt = [

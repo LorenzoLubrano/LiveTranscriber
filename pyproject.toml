@@ -37,9 +37,12 @@ dependencies = [
 # CUDA runtime for NVIDIA GPUs. Required for device="cuda".
 # On Blackwell (sm_120, RTX 50xx) only compute_type="float16" works —
 # CTranslate2 disables INT8 on sm_120 (release 4.6.2).
+# cuBLAS only. Listing the libraries actually mapped during GPU transcription
+# shows cuDNN is never loaded: CTranslate2 ships its own 300 KB cudnn64_9.dll
+# and its binary imports name no cuDNN library at all. Installing the 1 GB
+# nvidia-cudnn-cu12 wheel would change nothing but disk usage.
 gpu = [
     "nvidia-cublas-cu12>=12.8",
-    "nvidia-cudnn-cu12>=9.7",
 ]
 dev = [
     "pytest>=8.0",

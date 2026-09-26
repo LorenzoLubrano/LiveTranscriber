@@ -19,22 +19,19 @@ through WASAPI loopback. Light theme: [screenshot-light.png](docs/screenshot-lig
 
 ## Download
 
-Get them from the [latest release](https://github.com/LorenzoLubrano/LiveTranscriber/releases/latest).
-Both are portable folders: unzip anywhere, run `LiveTranscriber.exe`. Nothing is installed — no Python, no CUDA Toolkit, no
-Visual C++ redistributable.
+**`LiveTranscriber-1.0.0-windows-x64.zip`** — 127 MB, from the
+[latest release](https://github.com/LorenzoLubrano/LiveTranscriber/releases/latest).
+One download for every PC. Unzip anywhere and run `LiveTranscriber.exe`: nothing
+is installed, no Python, no CUDA Toolkit, no Visual C++ redistributable.
 
-| | Download | Size | Use it if |
-|---|---|---|---|
-| **Any PC** | `LiveTranscriber-1.0.0-windows-x64.zip` | 127 MB (329 MB unpacked) | You have no NVIDIA graphics card, or you are not sure |
-| **NVIDIA** | `LiveTranscriber-1.0.0-windows-x64-nvidia.zip` | 1.4 GB (2.3 GB unpacked) | You have an NVIDIA GeForce or RTX card |
+**With an NVIDIA card**, open *Impostazioni → Elaborazione* and press **Attiva la
+GPU**. The app fetches NVIDIA's cuBLAS libraries (527 MB), checks them against a
+checksum built into this release, and uses the GPU from then on — several times
+faster, and offline again once it is done. There is a pre-packaged
+`-nvidia.zip` too, for machines that will not be online.
 
-The NVIDIA build is large because it carries the CUDA runtime; it does the same
-job several times faster. The plain build runs on any 64-bit Windows PC,
-including AMD and Intel graphics — see [Speed](#speed-will-it-work-on-my-pc)
-for what to expect.
-
-Whisper models are not bundled. The app downloads the one you choose on first
-use (75 MB–3 GB), once, and then works offline.
+Whisper models are not bundled either. The app downloads the one you choose on
+first use (75 MB–3 GB), once.
 
 If the window does not open, run `LiveTranscriber.exe --selftest`: it checks the
 audio devices, the voice detection, the model and the speed of your PC, writes a
@@ -115,6 +112,23 @@ recording.
 If a model turns out to be too heavy while you are recording, the app says so,
 automatically reduces how often it transcribes, and keeps recording the audio
 either way — it never swaps the model mid-recording behind your back.
+
+### Where the NVIDIA libraries come from
+
+Transcription runs on [CTranslate2](https://github.com/OpenNMT/CTranslate2), and
+on the GPU it needs **cuBLAS** — 736 MB of NVIDIA libraries, which is why they
+are not in the main download. It does **not** need the CUDA Toolkit, and it does
+not need cuDNN either: listing the libraries actually mapped during GPU
+transcription, across three model architectures with real speech, gives
+`cublasLt64_12.dll`, `cublas64_12.dll`, and a 300 KB `cudnn64_9.dll` that
+CTranslate2 already ships inside its own package. The 1 GB cuDNN wheel is never
+touched.
+
+The pack the app downloads is NVIDIA's own `nvidia-cublas-cu12` wheel content,
+unmodified, published as a
+[separate release](https://github.com/LorenzoLubrano/LiveTranscriber/releases/tag/cuda-runtime-12.9).
+Its SHA-256 is pinned in the source, so only the exact archive a build was made
+against is ever unpacked, and the entry paths are checked before extraction.
 
 ### What about AMD and Intel graphics?
 

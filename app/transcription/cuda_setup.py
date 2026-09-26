@@ -18,7 +18,10 @@ Since Python 3.8, Windows ignores ``PATH`` for extension-module dependencies —
 CUDA work, is what makes the GPU path function at all.
 
 Frozen builds are handled too: PyInstaller copies the same tree next to the
-executable, so the bundle directory is searched as well.
+executable, so the bundle directory is searched as well — and so is the optional
+pack the user can download from inside the app
+(:mod:`app.transcription.cuda_pack`), which lands in per-user data rather than in
+the application folder.
 """
 
 from __future__ import annotations
@@ -42,6 +45,18 @@ _handles: list[object] = []  # keep the cookies alive for the process lifetime
 def _nvidia_roots() -> list[Path]:
     """Directories that may contain an ``nvidia`` package tree."""
     roots: list[Path] = []
+
+    # First: the pack the user downloaded from inside the app, if any. Searched
+    # ahead of the bundle so that a downloaded runtime wins over a stale one
+    # shipped with an older copy of the application folder.
+    try:
+        from app.transcription.cuda_pack import pack_dir
+
+        downloaded = pack_dir()
+        if (downloaded / "nvidia").is_dir():
+            roots.append(downloaded)
+    except Exception as exc:  # pragma: no cover - only if paths are unavailable
+        logger.debug("Could not check for a downloaded CUDA pack: %r", exc)
 
     if is_frozen():
         roots.append(bundle_dir())
@@ -119,6 +134,17 @@ def ensure_cuda_libraries() -> list[Path]:
 
     _registered = registered
     return registered
+
+
+def forget_registration() -> None:
+    """Drop the cached result, so a newly installed pack is picked up.
+
+    Directories already handed to ``add_dll_directory`` stay registered — the
+    cookies are deliberately kept alive — so this only allows new ones to be
+    added, which is exactly what installing the pack needs.
+    """
+    global _registered
+    _registered = None
 
 
 def cuda_libraries_available() -> bool:

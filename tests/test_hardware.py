@@ -205,7 +205,7 @@ def test_a_cpu_only_pc_is_not_told_something_is_missing(monkeypatch):
     assert hardware.describe_choice(choice) == "CPU (6 thread)"
 
 
-def test_an_nvidia_pc_on_the_cpu_build_is_told_where_to_look(monkeypatch):
+def test_an_nvidia_pc_without_the_libraries_is_offered_the_download(monkeypatch):
     from app.transcription import hardware
 
     gpu = hardware.GpuInfo(0, "NVIDIA GeForce RTX 5050 Laptop GPU", 12.0, 8151, 7000)
@@ -216,7 +216,9 @@ def test_an_nvidia_pc_on_the_cpu_build_is_told_where_to_look(monkeypatch):
     choice = hardware.AcceleratorChoice(device="cpu", compute_type="int8", cpu_threads=6)
     text = hardware.describe_choice(choice)
     assert "RTX 5050 Laptop" in text
-    assert "versione per NVIDIA" in text
+    # Actionable, not a dead end: the app can fetch the libraries itself.
+    assert "scaricarle dall'app" in text
+    assert hardware.gpu_availability().can_install
 
 
 def test_a_gpu_choice_names_the_card_and_the_precision():

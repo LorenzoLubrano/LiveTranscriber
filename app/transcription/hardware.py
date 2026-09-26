@@ -352,15 +352,20 @@ class GpuAvailability:
 
     usable: bool
     reason: str = ""
+    #: True when the only thing missing is the libraries, and the app can fetch
+    #: them. Distinguishing this from "no card at all" is what turns a dead end
+    #: into a button.
+    can_install: bool = False
 
 
 def gpu_availability() -> GpuAvailability:
     """Why the GPU option is, or is not, worth offering.
 
     Two independent things have to be true: a usable NVIDIA card, and the CUDA
-    runtime libraries in this build. Offering the choice when either is missing
-    produces a setting that silently does nothing.
+    runtime libraries. Offering the choice when either is missing produces a
+    setting that silently does nothing.
     """
+    from app.transcription.cuda_pack import size_label
     from app.transcription.cuda_setup import cuda_libraries_available
 
     gpus = detect_gpus()
@@ -373,8 +378,9 @@ def gpu_availability() -> GpuAvailability:
     if not cuda_libraries_available():
         return GpuAvailability(
             False,
-            f"{gpus[0].short_name} rilevata, ma questa versione non include le "
-            "librerie CUDA. Scarica la versione per NVIDIA per usarla.",
+            f"{gpus[0].short_name} rilevata, ma mancano le librerie NVIDIA. "
+            f"Puoi scaricarle dall'app ({size_label()}) e usare la GPU.",
+            can_install=True,
         )
     return GpuAvailability(True, f"{gpus[0].short_name} pronta all'uso.")
 
