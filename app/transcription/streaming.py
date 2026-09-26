@@ -305,8 +305,10 @@ class StreamingTranscriber:
         started = time.monotonic()
         self._last_run_position = stream_position
 
-        # Gate on speech: never ask Whisper to transcribe silence.
-        speech = self.detector.speech_duration(audio)
+        # Gate on speech: never ask Whisper to transcribe silence. The regions
+        # are kept: they are also what tells invented text from real text below.
+        regions = self.detector.speech_regions(audio)
+        speech = sum(region.duration for region in regions)
         if speech < self.streaming.min_speech_duration:
             self.skipped_silent_runs += 1
             self._drop_silent_buffer(audio, buffer_start)
@@ -319,6 +321,12 @@ class StreamingTranscriber:
         self.total_inference_time += result.inference_time
 
         words = _words_of(result.segments)
+        # Whisper invents text for stretches with no speech in them, and the
+        # confirmed context fed back as a prompt tells it exactly what to
+        # invent: the previous sentence, again. The VAD already knows where the
+        # speech was, so anything outside it is dropped before it can be
+        # confirmed.
+        words = drop_hallucinated_words(words, regions, buffer_start)
         if not words:
             self._drop_silent_buffer(audio, buffer_start)
             return None
@@ -366,10 +374,17 @@ class StreamingTranscriber:
             buffer_start = self._buffer_start
 
         confirmed: list[Word] = []
-        if audio.size and self.detector.speech_duration(audio) >= self.streaming.min_speech_duration:
+        regions = self.detector.speech_regions(audio) if audio.size else []
+        speech = sum(region.duration for region in regions)
+        if speech >= self.streaming.min_speech_duration:
             result = self.engine.transcribe(audio, self.settings, offset=buffer_start)
             self.runs += 1
-            words = _words_of(result.segments)
+            # The last pass is the most exposed to invented text: a recording
+            # usually ends with someone stopping talking, so the tail of the
+            # final buffer is silence with the whole transcript as its prompt.
+            words = drop_hallucinated_words(
+                _words_of(result.segments), regions, buffer_start
+            )
             if words:
                 # One last hypothesis, then accept everything still pending:
                 # there is no more audio that could revise it.
@@ -437,6 +452,38 @@ class StreamingTranscriber:
             self.settings.initial_prompt = None
             return
         self.settings.initial_prompt = "".join(w.text for w in words).strip() or None
+
+
+def drop_hallucinated_words(
+    words: list[Word], regions, offset: float
+) -> list[Word]:
+    """Keep only words that overlap a detected speech region.
+
+    ``words`` carry session time; ``regions`` are relative to the buffer that
+    was transcribed, so ``offset`` (the buffer's start) bridges the two.
+
+    Overlap, not containment: Whisper's word timestamps are approximate and a
+    real word often starts a fraction before the VAD calls it speech. What this
+    catches is the other case entirely — text placed seconds away from any
+    speech at all, which is invented.
+
+    With no regions at all the words are returned untouched. A VAD that failed
+    must not be able to delete a transcript.
+    """
+    if not regions or not words:
+        return words
+
+    spans = [(r.start + offset, r.end + offset) for r in regions]
+    kept = [
+        word
+        for word in words
+        if any(word.start < end and word.end > start for start, end in spans)
+    ]
+    if len(kept) != len(words):
+        logger.debug(
+            "Dropped %d word(s) outside the detected speech", len(words) - len(kept)
+        )
+    return kept
 
 
 def _words_of(segments: list[Segment]) -> list[Word]:

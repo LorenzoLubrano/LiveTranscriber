@@ -280,3 +280,57 @@ def test_segment_shifting_moves_words_too():
     shifted = segment.shifted(10.0)
     assert shifted.start == 10.0
     assert shifted.words[0].start == 10.0
+
+
+# -- hallucination on near-silence -----------------------------------------
+
+
+def test_words_inside_speech_are_kept():
+    from app.transcription.streaming import drop_hallucinated_words
+    from app.transcription.vad import SpeechRegion
+
+    words = [Word(0.5, 0.9, " ciao"), Word(1.0, 1.4, " mondo")]
+    assert drop_hallucinated_words(words, [SpeechRegion(0.4, 1.5)], 0.0) == words
+
+
+def test_words_in_the_silence_after_speech_are_dropped():
+    """The exact failure this exists for.
+
+    Recorded live: speech ended at 38.6s, a 0.58s blip followed in 4.7s of
+    otherwise silent audio, and Whisper - primed with the previous sentence as
+    context - filled the gap by repeating it verbatim.
+    """
+    from app.transcription.streaming import drop_hallucinated_words
+    from app.transcription.vad import SpeechRegion
+
+    real = [Word(1.0, 1.6, " energia.")]
+    hallucinated = [Word(3.0, 3.4, " Nella"), Word(3.4, 3.9, " prossima")]
+    kept = drop_hallucinated_words(real + hallucinated, [SpeechRegion(0.8, 1.8)], 0.0)
+    assert kept == real
+
+
+def test_a_word_only_touching_speech_is_kept():
+    """Timestamps are approximate, so any overlap counts."""
+    from app.transcription.streaming import drop_hallucinated_words
+    from app.transcription.vad import SpeechRegion
+
+    words = [Word(2.0, 2.6, " si")]
+    assert drop_hallucinated_words(words, [SpeechRegion(2.5, 3.0)], 0.0) == words
+
+
+def test_the_offset_is_applied():
+    """Words carry session time; regions are relative to the buffer."""
+    from app.transcription.streaming import drop_hallucinated_words
+    from app.transcription.vad import SpeechRegion
+
+    words = [Word(100.5, 100.9, " ciao")]
+    assert drop_hallucinated_words(words, [SpeechRegion(0.4, 1.0)], 100.0) == words
+    assert drop_hallucinated_words(words, [SpeechRegion(3.0, 4.0)], 100.0) == []
+
+
+def test_without_regions_nothing_is_dropped():
+    """A failed VAD must never silently delete a transcript."""
+    from app.transcription.streaming import drop_hallucinated_words
+
+    words = [Word(0.5, 0.9, " ciao")]
+    assert drop_hallucinated_words(words, [], 0.0) == words
