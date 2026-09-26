@@ -1,5 +1,7 @@
 # LiveTranscriber
 
+[![tests](https://github.com/LorenzoLubrano/LiveTranscriber/actions/workflows/tests.yml/badge.svg)](https://github.com/LorenzoLubrano/LiveTranscriber/actions/workflows/tests.yml)
+
 Real-time transcription of anything your PC plays, and of your microphone, on
 Windows 10/11. Lectures, meetings, videos, calls.
 
