@@ -97,6 +97,22 @@ def test_cpu_defaults_to_int8():
 
 # -- selection -------------------------------------------------------------
 
+
+@pytest.fixture
+def cuda_installed(monkeypatch):
+    """Pretend the CUDA runtime libraries are present.
+
+    A card is not enough: select_accelerator also checks that this build ships
+    cuBLAS and cuDNN. Faking only the card passed on the development machine,
+    which has the GPU extras installed, and failed on a clean CI runner, which
+    does not — the tests were reading the developer's environment instead of
+    stating what they meant.
+    """
+    monkeypatch.setattr(
+        "app.transcription.cuda_setup.cuda_libraries_available", lambda: True
+    )
+
+
 def test_cpu_preference_never_touches_the_gpu(monkeypatch):
     def explode():
         raise AssertionError("detect_gpus must not be called for Accelerator.CPU")
@@ -107,7 +123,7 @@ def test_cpu_preference_never_touches_the_gpu(monkeypatch):
     assert choice.compute_type == "int8"
 
 
-def test_auto_uses_a_gpu_when_present(monkeypatch):
+def test_auto_uses_a_gpu_when_present(monkeypatch, cuda_installed):
     monkeypatch.setattr("app.transcription.hardware.detect_gpus", lambda: [BLACKWELL])
     choice = select_accelerator(Accelerator.AUTO)
     assert choice.device == "cuda"
@@ -133,7 +149,9 @@ def test_requesting_a_missing_gpu_explains_itself(monkeypatch):
     assert "Traceback" not in choice.fallback_reason
 
 
-def test_low_vram_warns_but_still_selects_the_gpu(monkeypatch, caplog):
+def test_low_vram_warns_but_still_selects_the_gpu(
+    monkeypatch, caplog, cuda_installed
+):
     """CTranslate2 allocates lazily; refusing on an estimate would be wrong."""
     monkeypatch.setattr(
         "app.transcription.hardware.detect_gpus", lambda: [make_gpu(12.0, free_mb=500)]
