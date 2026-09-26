@@ -134,14 +134,25 @@ class Quality(StrEnum):
 #:
 #: The split exists because **streaming costs far more than transcribing a file
 #: once**. LocalAgreement re-transcribes a growing buffer, so each second of
-#: audio passes through Whisper roughly four or five times. Measured on the
-#: development machine (Ryzen 7 260, RTX 5050), transcribing a file gave
-#: small/CPU a 7.5x real-time factor — but the same model *streaming* used 70%
-#: of the audio time, leaving only 1.4x of headroom and latency spikes to 9.6s.
-#: Medium on CPU used 115%: it cannot keep up at all, and latency grows without
-#: bound.
+#: audio passes through Whisper roughly four or five times, and a one-shot
+#: benchmark must never be used to choose a live model.
 #:
-#: So a one-shot benchmark must never be used to choose a live model.
+#: These two columns are a hardware *guess*, and the only thing they know is
+#: whether there is a GPU. That is not enough, which is why
+#: :mod:`app.transcription.calibration` measures the machine and overrides them.
+#: Measured on the development CPU (Ryzen 7 260, six physical cores, int8), cost
+#: per second of audio:
+#:
+#: ======  ======  ========  ==============================================
+#: model   cost    headroom  live behaviour
+#: ======  ======  ========  ==============================================
+#: tiny    0.18    5.5x      comfortable
+#: base    0.81    1.2x      works, little margin
+#: small   1.03    1.0x      cannot keep up: 31s mean latency, 88s peak
+#: ======  ======  ========  ==============================================
+#:
+#: The same `small` on this machine's GPU costs 0.13. One model, one PC, and the
+#: difference between usable and unusable — hence the measurement.
 _QUALITY_MAP: dict[Quality, dict[bool, str]] = {
     #                      GPU        CPU
     Quality.FAST:     {True: "tiny",  False: "tiny"},
@@ -151,20 +162,17 @@ _QUALITY_MAP: dict[Quality, dict[bool, str]] = {
 
 
 def recommend_model(quality: Quality, has_gpu: bool) -> ModelSpec:
-    """Model for a quality preset on this hardware.
+    """Model for a quality preset, as a starting point only.
 
-    Measured streaming headroom on the development machine:
+    A preset is what the user *wants*; whether this machine can deliver it live
+    is a separate question, and the answer varies by more than a factor of two
+    between CPUs that look alike on paper. So the caller is expected to pass the
+    result through :func:`app.transcription.calibration.cap_to_measurements`,
+    which steps it down to what has actually been measured here.
 
-    ======  ======  ==========  =============  =========
-    model   device  inference   headroom       accuracy
-    ======  ======  ==========  =============  =========
-    tiny    GPU     6%          16.2x          83%
-    tiny    CPU     14%          7.4x          84%
-    small   GPU     13%          7.7x          94%
-    small   CPU     70%          1.4x          94%
-    medium  GPU     28%          3.6x          95%
-    medium  CPU     115%         0.9x          unusable
-    ======  ======  ==========  =============  =========
+    On CPU, "Massima qualità" deliberately still names `small`: it is the right
+    answer on a fast desktop, and on a slow laptop the measurement takes it away
+    again with a reason the user can read.
     """
     return get_spec(_QUALITY_MAP[quality][bool(has_gpu)])
 

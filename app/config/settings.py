@@ -11,6 +11,7 @@ string, so every getter coerces explicitly rather than trusting the type back.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +86,13 @@ class AppSettings:
     cpu_threads: int = 0
 
     first_run_done: bool = False
+
+    #: Measured streaming cost per model on *this* machine, as JSON:
+    #: ``{"cpu/int8": {"small": 1.03}, "cuda/float16": {"small": 0.13}}``.
+    #: A machine fact rather than a preference, but it belongs with the other
+    #: per-machine state — QSettings is per user per machine, which is exactly
+    #: the scope a speed measurement has.
+    speed_measurements: str = ""
 
     #: Fields that are not written to disk.
     _transient: tuple[str, ...] = field(default=("_transient",), repr=False)
@@ -181,3 +189,42 @@ class AppSettings:
             min_speech_duration_ms=self.min_speech_duration_ms,
             min_silence_duration_ms=self.min_silence_duration_ms,
         )
+
+    # -- measured speed ---------------------------------------------------
+
+    def _measurements(self) -> dict[str, dict[str, float]]:
+        if not self.speed_measurements:
+            return {}
+        try:
+            data = json.loads(self.speed_measurements)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring unreadable speed measurements")
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            str(device): {str(k): float(v) for k, v in models.items()}
+            for device, models in data.items()
+            if isinstance(models, dict)
+        }
+
+    def measured_cost(self, model_key: str, device: str, compute_type: str) -> float | None:
+        """Streaming cost measured for this model here, or None.
+
+        Keyed by device *and* compute type: a float16 GPU result says nothing
+        about what the CPU can sustain, and choosing a model from the wrong one
+        is how a machine ends up with a model it cannot keep up with.
+        """
+        bucket = self._measurements().get(f"{device}/{compute_type}", {})
+        value = bucket.get(model_key)
+        return float(value) if value else None
+
+    def remember_measurement(
+        self, model_key: str, device: str, compute_type: str, cost: float
+    ) -> None:
+        """Store one measurement, replacing any earlier one for that model."""
+        if cost <= 0:
+            return
+        data = self._measurements()
+        data.setdefault(f"{device}/{compute_type}", {})[model_key] = round(cost, 4)
+        self.speed_measurements = json.dumps(data, separators=(",", ":"))
