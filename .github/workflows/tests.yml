@@ -1,0 +1,38 @@
+# Runs the parts of the suite that need no sound card and no GPU.
+#
+# Windows only, deliberately: the app is Windows-only (WASAPI loopback has no
+# equivalent elsewhere), and a Linux job would either fail on import or pass
+# while testing nothing that matters.
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check app tests scripts
+
+      - name: Test
+        # The hardware marker covers everything that needs a real audio device;
+        # a GitHub runner has none. Qt needs an offscreen platform plugin.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest tests -q -m "not hardware"
