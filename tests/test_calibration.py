@@ -63,6 +63,8 @@ def test_a_zero_cost_measurement_is_not_trusted():
 def test_a_too_slow_model_is_stepped_down():
     assert suggest_model(cost(1.4, model="small")) == "base"
     assert suggest_model(cost(1.4, model="base")) == "tiny"
+    # Measured on this CPU: medium 1.82, turbo 1.38 — the next thing to try.
+    assert suggest_model(cost(1.82, model="medium")) == "turbo"
 
 
 def test_the_smallest_model_has_nowhere_to_go():
@@ -81,6 +83,30 @@ def test_an_untrustworthy_measurement_changes_nothing():
     assert suggest_model(cost(0.0, model="small")) == "small"
 
 
+def test_a_model_the_app_picks_itself_keeps_a_margin():
+    """Automatic choice caps below the cliff, not at it.
+
+    A 20 s measurement is taken at whatever clock the CPU is boosting to; an
+    hour of recording is not. 0.75 keeps up in the measurement and is still not
+    something to choose on a user's behalf.
+    """
+    measured = {"small": 0.75}
+    assert cap_to_measurements("small", measured.get) == "base"
+    # The user's own explicit choice is judged against the real cliff instead.
+    assert cost(0.75, model="small").verdict is Verdict.TIGHT
+
+
+def test_turbo_sits_below_medium_on_the_ladder():
+    """Measured, against expectation: 1.38 vs 1.82 on CPU, 0.20 vs 0.45 on GPU.
+
+    Turbo is large-v3's encoder with a four-layer decoder, and streaming re-runs
+    the encoder every pass, so this project assumed turbo would cost more than
+    medium. It does not.
+    """
+    assert STREAMING_LADDER.index("turbo") < STREAMING_LADDER.index("medium")
+    assert lighter_model("medium") == "turbo"
+
+
 def test_the_ladder_covers_the_catalogue_cheapest_first():
     from app.transcription import models
 
@@ -89,7 +115,7 @@ def test_the_ladder_covers_the_catalogue_cheapest_first():
 
 
 def test_lighter_model_walks_down_one_rung():
-    assert lighter_model("medium") == "small"
+    assert lighter_model("turbo") == "small"
     assert lighter_model("tiny") is None
 
 
@@ -112,7 +138,7 @@ def test_the_descent_stops_at_the_first_unmeasured_rung():
     Assuming it is slow would be a guess, and guessing is what the measurement
     exists to replace — the runtime monitor covers the case where it is wrong.
     """
-    measured = {"medium": 2.0, "small": 1.03}
+    measured = {"medium": 1.82, "turbo": 1.38, "small": 0.97}
     assert cap_to_measurements("medium", measured.get) == "base"
 
 

@@ -88,7 +88,7 @@ CATALOGUE: tuple[ModelSpec, ...] = (
         repo_id="Systran/faster-whisper-medium",
         display_name="Medium",
         quality="Alta qualità",
-        description="Più preciso di Small. Consigliato con GPU.",
+        description="Più preciso di Small, ma più lento di Turbo a pari qualità.",
         approx_size_mb=1530,
     ),
     ModelSpec(
@@ -104,7 +104,7 @@ CATALOGUE: tuple[ModelSpec, ...] = (
         repo_id="mobiuslabsgmbh/faster-whisper-large-v3-turbo",
         display_name="Turbo",
         quality="Qualità/velocità",
-        description="Qualità vicina a Large-v3, molto più veloce. Ottimo con GPU.",
+        description="Qualità vicina a Large-v3 a metà del costo di Medium. La scelta migliore con GPU.",
         approx_size_mb=1620,
     ),
 )
@@ -140,24 +140,30 @@ class Quality(StrEnum):
 #: These two columns are a hardware *guess*, and the only thing they know is
 #: whether there is a GPU. That is not enough, which is why
 #: :mod:`app.transcription.calibration` measures the machine and overrides them.
-#: Measured on the development CPU (Ryzen 7 260, six physical cores, int8), cost
-#: per second of audio:
+#: Measured here (Ryzen 7 260, six physical cores; RTX 5050), cost per second of
+#: audio, medians of repeated runs — lower is better and 1.0 cannot keep up:
 #:
-#: ======  ======  ========  ==============================================
-#: model   cost    headroom  live behaviour
-#: ======  ======  ========  ==============================================
-#: tiny    0.18    5.5x      comfortable
-#: base    0.81    1.2x      works, little margin
-#: small   1.03    1.0x      cannot keep up: 31s mean latency, 88s peak
-#: ======  ======  ========  ==============================================
+#: ========  =========  =========
+#: model     CPU int8   GPU fp16
+#: ========  =========  =========
+#: tiny      0.18       0.07
+#: base      0.55       -
+#: small     0.97       0.13
+#: turbo     1.38       0.20
+#: medium    1.82       0.45
+#: large-v3  1.81       0.36
+#: ========  =========  =========
 #:
-#: The same `small` on this machine's GPU costs 0.13. One model, one PC, and the
-#: difference between usable and unusable — hence the measurement.
+#: `small` is excellent on this GPU and unusable on the same machine's CPU. That
+#: gap is the whole reason the app measures rather than assumes.
+#:
+#: "Massima qualità" on GPU is Turbo rather than Medium: measured, it costs less
+#: than half as much and is close to large-v3 in accuracy.
 _QUALITY_MAP: dict[Quality, dict[bool, str]] = {
-    #                      GPU        CPU
+    #                      GPU         CPU
     Quality.FAST:     {True: "tiny",  False: "tiny"},
     Quality.BALANCED: {True: "small", False: "base"},
-    Quality.BEST:     {True: "medium", False: "small"},
+    Quality.BEST:     {True: "turbo", False: "small"},
 }
 
 

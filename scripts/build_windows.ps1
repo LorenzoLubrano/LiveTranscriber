@@ -26,15 +26,19 @@
 .PARAMETER SkipTests
     Skip the test run. Not recommended: the suite is fast.
 
+.PARAMETER Package
+    Also produce the release .zip next to the folder.
+
 .EXAMPLE
     .\scripts\build_windows.ps1
-    .\scripts\build_windows.ps1 -Gpu -Clean
+    .\scripts\build_windows.ps1 -Gpu -Clean -Package
 #>
 [CmdletBinding()]
 param(
     [switch]$Gpu,
     [switch]$Clean,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$Package
 )
 
 $ErrorActionPreference = 'Stop'
@@ -150,6 +154,40 @@ the separate files under _internal\, and may be replaced with your own builds.
 Full details, including where to obtain their sources, are in
 THIRD_PARTY_LICENSES.md.
 "@ | Set-Content -Path (Join-Path $licenceDir 'README-LICENSES.txt') -Encoding utf8
+
+# ----------------------------------------------------------------- packaging
+
+if ($Package) {
+    Write-Step 'Packaging the release archive'
+
+    $version = (& $Python -c "import app; print(app.__version__)").Trim()
+    # Named so the download itself says who it is for: the plain one runs on any
+    # PC, and only the other one needs an NVIDIA card.
+    $suffix = if ($Gpu) { '-nvidia' } else { '' }
+    $zipPath = Join-Path $DistDir "LiveTranscriber-$version-windows-x64$suffix.zip"
+
+    if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+
+    # ZipFile rather than Compress-Archive: the cmdlet in Windows PowerShell 5.1
+    # cannot write an archive past 2 GB, and the NVIDIA build is 2.3 GB of DLLs.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $AppDir, $zipPath,
+        [System.IO.Compression.CompressionLevel]::Optimal,
+        $true)   # include the folder itself, so extracting gives one tidy folder
+
+    $zip = Get-Item $zipPath
+    $zipGiB = $zip.Length / 1GB
+    Write-Detail ("archive: {0} ({1:N2} GiB)" -f $zip.Name, $zipGiB)
+
+    # GitHub refuses a release asset larger than 2 GiB, and finding that out
+    # during the upload wastes the whole transfer.
+    if ($zipGiB -gt 2.0) {
+        Write-Host ''
+        Write-Host ("  WARNING: {0:N2} GiB exceeds GitHub's 2 GiB limit for a " -f $zipGiB) -ForegroundColor Yellow
+        Write-Host '  release asset. Split it or trim the bundled CUDA DLLs.' -ForegroundColor Yellow
+    }
+}
 
 # ------------------------------------------------------------------- summary
 

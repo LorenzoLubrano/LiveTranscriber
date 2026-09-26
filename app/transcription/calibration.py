@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import tempfile
+import time
 import wave
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,22 +44,42 @@ COMFORTABLE_COST = 0.5
 #: capture ring buffer starts overwriting audio that was never saved.
 TOO_SLOW_COST = 0.85
 
+#: Ceiling for a model the app chooses *by itself*, which needs more margin than
+#: one the user picked knowingly. A 20 s measurement is taken at whatever clock
+#: speed the CPU happens to be boosting to; a lecture is an hour long, and a
+#: laptop does not hold its boost clocks for an hour. Measured evidence for the
+#: gap: `small` on this CPU read 0.65 on a cold machine and 0.96 across a hot
+#: sequential batch, on the same code.
+AUTO_CEILING = 0.7
+
 #: Below this there is room for the next model up, which typically costs two to
 #: three times as much.
 STEP_UP_COST = 0.25
 
-#: Seconds of audio to measure over. Long enough to cover several inference
-#: passes and a commit, short enough that nobody minds waiting.
+#: Seconds of audio to measure over. Long enough for the working buffer to reach
+#: its live size, short enough that nobody minds waiting. Verified stable: the
+#: same model measured 0.74 / 0.72 / 0.71 / 0.72 / 0.69 over 8, 12, 20, 30 and
+#: 45 seconds, so 20 is not a special value — it is simply enough.
 DEFAULT_TARGET_SECONDS = 20.0
 
-#: Models from cheapest to most expensive **when streaming**, which is not the
-#: same as their file size. Turbo is large-v3's encoder with a four-layer
-#: decoder: it wins on long files, where decoding dominates, but streaming
-#: re-runs the encoder over the whole buffer on every pass, so its cost sits
-#: near large-v3 rather than near medium.
+#: Models from cheapest to most expensive **when streaming**, which is neither
+#: their file size nor their parameter count. Measured here, cost per second of
+#: audio (CPU int8 / GPU float16, medians of repeated runs):
+#:
+#:     tiny 0.18 / 0.07    base 0.55 / -       small 0.97 / 0.13
+#:     turbo 1.38 / 0.20   medium 1.82 / 0.45  large-v3 1.81 / 0.36
+#:
+#: Turbo sits *below* medium, not above it: it is large-v3's encoder with a
+#: four-layer decoder, and even though streaming re-runs the encoder on every
+#: pass, the decoder saving still wins — 1.3x cheaper than medium on CPU and 2.2x
+#: cheaper on the GPU, at close to large-v3 accuracy. This project assumed the
+#: opposite until it measured.
+#:
+#: Medium and large-v3 come out within noise of each other (1.82 vs 1.81 on CPU),
+#: so medium is placed first as the smaller download.
 #:
 #: Only used to pick a neighbour to *offer*. The measurement is the authority.
-STREAMING_LADDER = ("tiny", "base", "small", "medium", "turbo", "large-v3")
+STREAMING_LADDER = ("tiny", "base", "small", "turbo", "medium", "large-v3")
 
 
 class CalibrationError(RuntimeError):
@@ -174,19 +195,24 @@ def cap_to_measurements(
     preferred: str,
     lookup: Callable[[str], float | None],
     sources: int = 1,
+    ceiling: float = AUTO_CEILING,
 ) -> str:
     """Step ``preferred`` down while past measurements say it cannot keep up.
 
     ``lookup`` returns the measured cost for a model on this machine, or None if
     it was never measured. An unmeasured model stops the descent rather than
     being assumed slow: guessing is what this whole module exists to avoid.
+
+    The ceiling is deliberately below :data:`TOO_SLOW_COST`. This picks a model
+    on the user's behalf, so it should leave the margin that a 20 s measurement
+    on a boosting laptop does not prove is there.
     """
     current = preferred
     seen: set[str] = set()
     while current not in seen:
         seen.add(current)
         cost = lookup(current)
-        if cost is None or cost * max(1, sources) < TOO_SLOW_COST:
+        if cost is None or cost * max(1, sources) < ceiling:
             return current
         lighter = lighter_model(current)
         if lighter is None:
@@ -322,6 +348,11 @@ def speech_sample(min_seconds: float = DEFAULT_TARGET_SECONDS) -> np.ndarray:
 # --------------------------------------------------------------------------
 
 
+def streaming_chunk(transcriber) -> float:
+    """How much new audio the transcriber waits for between passes."""
+    return transcriber.streaming.chunk_duration
+
+
 def measure_streaming_cost(
     model_key: str,
     accelerator: Accelerator = Accelerator.AUTO,
@@ -351,20 +382,38 @@ def measure_streaming_cost(
         StreamingSettings(),
     )
 
-    block = int(0.5 * TARGET_SAMPLE_RATE)
-    total = min(sample.size, int(target_seconds * TARGET_SAMPLE_RATE))
+    # A virtual clock, not a fixed feed rate. Audio keeps arriving while a pass
+    # runs, so on a machine that is behind, each pass starts with more audio
+    # waiting than the last — the buffer grows, passes get more expensive, and
+    # the load diverges. Feeding a fixed 2 s between passes hides exactly that:
+    # it measured 0.71 for `small` on this CPU where a real paced recording
+    # measured 1.00. Advancing the clock by the time each pass actually took
+    # reproduces the real dynamics and still costs no wall-clock waiting.
+    total_samples = int(target_seconds * TARGET_SAMPLE_RATE)
+    audio_clock = 0.0     # seconds of audio that have "arrived"
     fed = 0
     try:
-        while fed < total:
+        while fed < total_samples:
             if cancelled is not None and cancelled():
                 break
-            chunk = sample[fed : fed + block]
-            transcriber.feed(chunk)
-            fed += chunk.size
-            if transcriber.should_run():
-                transcriber.process()
+
+            # Nothing runs before enough new audio exists, exactly as live.
+            audio_clock = max(
+                audio_clock, transcriber.stream_position + streaming_chunk(transcriber)
+            )
+            want = min(int(audio_clock * TARGET_SAMPLE_RATE), total_samples)
+            if want > fed:
+                chunk = sample[fed:want] if want <= sample.size else sample[fed:]
+                transcriber.feed(chunk)
+                fed += chunk.size
+
+            started = time.monotonic()
+            transcriber.process()
+            # The audio that arrived while that pass was running.
+            audio_clock += time.monotonic() - started
+
             if progress is not None:
-                progress(fed / total)
+                progress(fed / total_samples)
         transcriber.finish()
     finally:
         engine.unload()
