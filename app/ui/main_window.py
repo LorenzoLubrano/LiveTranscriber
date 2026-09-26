@@ -52,7 +52,6 @@ from app.sessions.session import (
 )
 from app.sessions.transcript import Source, Transcript, format_timestamp
 from app.transcription import models
-from app.transcription.hardware import Accelerator, detect_gpus
 from app.transcription.streaming import StreamingUpdate
 from app.ui.theme import (
     Palette,
@@ -89,6 +88,10 @@ class MainWindow(QMainWindow):
 
     def __init__(self, settings=None) -> None:
         super().__init__()
+        if settings is None:
+            from app.config.settings import AppSettings
+
+            settings = AppSettings.load()
         self.app_settings = settings
         self.transcript = Transcript()
         self.session: RecordingSession | None = None
@@ -107,6 +110,7 @@ class MainWindow(QMainWindow):
         self._connect()
         self._apply_theme()
         self.refresh_devices()
+        self._restore_settings()
         self._update_state(SessionState.IDLE)
 
         # One timer drives the clock, the meters and the status chips.
@@ -417,10 +421,10 @@ class MainWindow(QMainWindow):
         resolves both facts, so the chip never promises acceleration the build
         cannot deliver.
         """
-        from app.transcription.hardware import select_accelerator
+        from app.transcription.hardware import describe_choice, select_accelerator
 
         try:
-            choice = select_accelerator(Accelerator.AUTO)
+            choice = select_accelerator(self.app_settings.accelerator_choice)
         except Exception:
             logger.exception("Could not resolve the accelerator")
             self.accel_chip.setText("CPU")
@@ -429,13 +433,12 @@ class MainWindow(QMainWindow):
         if choice.is_gpu and choice.gpu is not None:
             self.accel_chip.setText(f"GPU {choice.gpu.short_name}")
         else:
-            self.accel_chip.setText("CPU")
-            gpus = detect_gpus()
-            if gpus:
-                self.accel_chip.setToolTip(
-                    f"{gpus[0].short_name} rilevata, ma questa versione non "
-                    "include le librerie CUDA. La trascrizione usa la CPU."
-                )
+            # Thread count on the chip, not just "CPU": on the machines without
+            # a GPU it is the number that explains the speed they are getting.
+            self.accel_chip.setText(
+                f"CPU · {choice.cpu_threads} thread" if choice.cpu_threads else "CPU"
+            )
+        self.accel_chip.setToolTip(describe_choice(choice))
 
     def set_theme(self, mode: ThemeMode) -> None:
         self._theme_mode = mode
@@ -500,6 +503,75 @@ class MainWindow(QMainWindow):
         self.model_combo.setCurrentIndex(max(0, index))
         self._sync_model_hint()
 
+    def select_model(self, model_key: str) -> None:
+        """Switch the model shown on the main screen (called from settings)."""
+        index = self.model_combo.findData(model_key)
+        if index >= 0:
+            self.model_combo.setCurrentIndex(index)
+
+    def apply_settings(self) -> None:
+        """Re-read the stored settings after the settings dialog changed them."""
+        self.set_theme(self.app_settings.theme_mode)
+        self.timestamps_button.setChecked(self.app_settings.show_timestamps)
+        self.autoscroll_button.setChecked(self.app_settings.autoscroll)
+        self._refresh_accelerator_chip()
+
+    # --------------------------------------------------------- persistence
+
+    def _restore_settings(self) -> None:
+        """Put back what the user chose last time.
+
+        Runs after the device and model lists are filled, because the choices
+        are restored by matching against what is actually available now: a
+        microphone that has been unplugged must fall back to the default rather
+        than leave the app pointing at nothing.
+        """
+        settings = self.app_settings
+        self.set_theme(settings.theme_mode)
+
+        try:
+            button = self.mode_buttons[InputMode(settings.input_mode)]
+        except (KeyError, ValueError):
+            button = None
+        if button is not None:
+            button.setChecked(True)
+            self._sync_device_rows()
+
+        _select_device(self.loopback_combo, settings.loopback_device_key)
+        _select_device(self.mic_combo, settings.microphone_device_key)
+
+        index = self.language_combo.findData(settings.language)
+        if index >= 0:
+            self.language_combo.setCurrentIndex(index)
+
+        # Only a model that is on disk: restoring a choice that would now need a
+        # download would turn "open the app" into "start a download".
+        if models.is_available(settings.model):
+            index = self.model_combo.findData(settings.model)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
+
+        self.timestamps_button.setChecked(settings.show_timestamps)
+        self.autoscroll_button.setChecked(settings.autoscroll)
+
+    def _persist_settings(self) -> None:
+        """Remember the current choices. Never raises: closing must not fail."""
+        settings = self.app_settings
+        try:
+            settings.theme = str(self._theme_mode)
+            settings.input_mode = str(self.current_mode())
+            loopback = self.loopback_combo.currentData()
+            microphone = self.mic_combo.currentData()
+            settings.loopback_device_key = loopback.key if loopback else ""
+            settings.microphone_device_key = microphone.key if microphone else ""
+            settings.language = self.language_combo.currentData() or "auto"
+            settings.model = self.model_combo.currentData() or settings.model
+            settings.show_timestamps = self.timestamps_button.isChecked()
+            settings.autoscroll = self.autoscroll_button.isChecked()
+            settings.save()
+        except Exception:
+            logger.exception("Could not save settings")
+
     def _default_model(self) -> str:
         """Pick a model this machine can actually keep up with.
 
@@ -512,16 +584,31 @@ class MainWindow(QMainWindow):
 
         A model already on disk wins over a better one that would have to be
         downloaded first.
+
+        Measurements taken on this machine override the guess entirely. The
+        hardware rule can only say "GPU or not", and that is not enough: on the
+        development CPU, `base` costs 0.81 of real time and `small` costs 1.03 —
+        one is usable and the other cannot keep up at all, on the same PC.
         """
-        from app.transcription.hardware import Accelerator, select_accelerator
+        from app.transcription.calibration import cap_to_measurements
+        from app.transcription.hardware import select_accelerator
         from app.transcription.models import Quality, recommend_model
 
         try:
-            has_gpu = select_accelerator(Accelerator.AUTO).is_gpu
+            choice = select_accelerator(self.app_settings.accelerator_choice)
+            has_gpu = choice.is_gpu
         except Exception:
-            has_gpu = False
+            choice, has_gpu = None, False
 
         preferred = recommend_model(Quality.BALANCED, has_gpu).key
+        if choice is not None:
+            preferred = cap_to_measurements(
+                preferred,
+                lambda key: self.app_settings.measured_cost(
+                    key, choice.device, choice.compute_type
+                ),
+                sources=2 if self.current_mode() is InputMode.BOTH else 1,
+            )
         if models.is_available(preferred):
             return preferred
 
@@ -584,9 +671,12 @@ class MainWindow(QMainWindow):
             loopback_device=self.loopback_combo.currentData(),
             microphone_device=self.mic_combo.currentData(),
             model=model_key,
-            accelerator=Accelerator.AUTO,
+            accelerator=self.app_settings.accelerator_choice,
             language=self.language_combo.currentData() or "auto",
             title=self.title_edit.text().strip(),
+            output_root=self.app_settings.output_path,
+            streaming=self.app_settings.streaming_settings(),
+            vad=self.app_settings.vad_settings(),
         )
 
         self.transcript.clear()
@@ -656,6 +746,59 @@ class MainWindow(QMainWindow):
             index = self.model_combo.findData(model_key)
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
+            self._offer_speed_check(model_key)
+
+    def _offer_speed_check(self, model_key: str) -> None:
+        """Offer to measure this PC, once, after the first model arrives.
+
+        Only on the CPU path, and only once: a GPU has so much headroom that
+        measuring answers a question nobody has, while on a CPU the answer
+        decides whether the app is usable at all. Asked rather than done, because
+        it takes the better part of a minute on exactly those machines.
+        """
+        from app.transcription.hardware import select_accelerator
+
+        if self.app_settings.first_run_done:
+            return
+        try:
+            choice = select_accelerator(self.app_settings.accelerator_choice)
+        except Exception:
+            return
+        if choice.is_gpu:
+            self.app_settings.first_run_done = True
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Prova di velocità",
+            "Vuoi misurare quanto margine ha questo PC con il modello scelto?\n\n"
+            "Serve meno di un minuto, funziona senza connessione e non registra "
+            "nulla. Senza la misura l'app non può sapere se questo PC riesce a "
+            "trascrivere dal vivo.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        self.app_settings.first_run_done = True
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        from app.transcription.calibration import suggest_model
+        from app.ui.speed_dialog import SpeedTestDialog
+
+        speed = SpeedTestDialog(
+            model_key, accelerator=self.app_settings.accelerator_choice, parent=self
+        )
+        speed.exec()
+        measured = speed.result
+        if measured is None or not measured.is_usable:
+            return
+
+        self.app_settings.remember_measurement(
+            measured.model_key, measured.device, measured.compute_type, measured.cost
+        )
+        suggested = suggest_model(measured)
+        if suggested != model_key and models.is_available(suggested):
+            self.select_model(suggested)
 
     # --------------------------------------------------------- transcript
 
@@ -890,8 +1033,25 @@ class MainWindow(QMainWindow):
             self.stop_recording()
 
         self._tick_timer.stop()
+        self._persist_settings()
         audio_devices.terminate_pyaudio()
         event.accept()
+
+
+def _select_device(combo: QComboBox, key: str) -> None:
+    """Select the device with this key, if it is still present.
+
+    Keys rather than indices: PortAudio renumbers devices whenever anything is
+    plugged in, so an index would quietly select a different device after a
+    reboot.
+    """
+    if not key:
+        return
+    for index in range(combo.count()):
+        device = combo.itemData(index)
+        if device is not None and getattr(device, "key", "") == key:
+            combo.setCurrentIndex(index)
+            return
 
 
 def _set_row_visible(layout: QVBoxLayout, visible: bool) -> None:

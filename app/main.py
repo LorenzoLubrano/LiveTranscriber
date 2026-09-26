@@ -79,9 +79,15 @@ def main() -> int:
     logger.info("LiveTranscriber starting; log at %s", log_path)
 
     from app.audio.devices import terminate_pyaudio
+    from app.config.settings import AppSettings
     from app.ui.main_window import MainWindow
 
-    window = MainWindow()
+    # Loaded here and handed in, so the window and the settings dialog work on
+    # one object: two independent loads would let one overwrite the other's
+    # changes on save.
+    settings = AppSettings.load()
+
+    window = MainWindow(settings)
     window.show()
 
     try:

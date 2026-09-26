@@ -395,3 +395,45 @@ def test_accelerator_chip_never_promises_more_than_the_build_has(qtbot, monkeypa
     )
     window._refresh_accelerator_chip()
     assert window.accel_chip.text() == "CPU"
+
+
+def test_accelerator_chip_names_the_thread_count_on_a_cpu_machine(qtbot, monkeypatch):
+    """On a PC without a GPU, the thread count is what explains the speed."""
+    from app.transcription.hardware import AcceleratorChoice
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    monkeypatch.setattr(
+        "app.transcription.hardware.select_accelerator",
+        lambda *a, **k: AcceleratorChoice(
+            device="cpu", compute_type="int8", cpu_threads=4
+        ),
+    )
+    window._refresh_accelerator_chip()
+    assert window.accel_chip.text() == "CPU · 4 thread"
+
+
+def test_settings_survive_a_restart(qtbot, tmp_path, monkeypatch):
+    """The settings dialog used to be decorative: nothing was ever stored."""
+    from app.config.settings import AppSettings
+    from app.transcription.hardware import Accelerator
+    from app.ui.main_window import MainWindow
+
+    settings = AppSettings()
+    settings.accelerator = str(Accelerator.CPU)
+    settings.show_timestamps = True
+    settings.output_folder = str(tmp_path)
+
+    window = MainWindow(settings)
+    qtbot.addWidget(window)
+
+    assert window.timestamps_button.isChecked()
+    assert window.app_settings.accelerator_choice is Accelerator.CPU
+
+    saved: list[bool] = []
+    monkeypatch.setattr(type(settings), "save", lambda self: saved.append(True))
+    window._persist_settings()
+    assert saved == [True]
+    assert settings.show_timestamps is True

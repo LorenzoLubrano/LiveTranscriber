@@ -11,6 +11,8 @@ who has experimented is never stranded.
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -34,6 +36,8 @@ from app.transcription import models
 from app.transcription.hardware import Accelerator, describe_hardware
 from app.ui.theme import ThemeMode
 from app.utils.paths import app_data_dir, logs_dir
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsDialog(QDialog):
@@ -59,6 +63,84 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+        self._load_values()
+
+    # -- reading and writing the stored settings --------------------------
+
+    def _load_values(self) -> None:
+        """Show what is actually stored.
+
+        Without this the dialog is decorative: it opens on its defaults whatever
+        the user chose last time, and every change is lost on close.
+        """
+        settings = self._settings()
+        if settings is None:
+            return
+
+        index = self.theme_combo.findData(settings.theme_mode)
+        if index >= 0:
+            self.theme_combo.setCurrentIndex(index)
+
+        self.folder_edit.setText(str(settings.output_path))
+        self.timestamps_check.setChecked(settings.show_timestamps)
+        self.autoscroll_check.setChecked(settings.autoscroll)
+
+        index = self.accelerator_combo.findData(settings.accelerator_choice)
+        model = self.accelerator_combo.model()
+        item = model.item(index) if index >= 0 and hasattr(model, "item") else None
+        # A stored GPU preference on a PC that cannot honour it stays stored, but
+        # is not shown as the active choice — the app is running on the CPU.
+        if index >= 0 and (item is None or item.isEnabled()):
+            self.accelerator_combo.setCurrentIndex(index)
+
+        self.chunk_spin.setValue(settings.chunk_duration)
+        self.buffer_spin.setValue(settings.max_buffer_duration)
+        self.agreement_spin.setValue(settings.agreement_runs)
+        self.vad_check.setChecked(settings.vad_enabled)
+        self.vad_spin.setValue(settings.vad_threshold)
+        self.silence_spin.setValue(settings.min_silence_duration_ms)
+        self.speech_spin.setValue(settings.min_speech_duration_ms)
+        self.beam_spin.setValue(settings.beam_size)
+        self.threads_spin.setValue(settings.cpu_threads)
+
+    def _store_values(self) -> None:
+        """Save the choices. Never raises: closing a dialog must not fail."""
+        settings = self._settings()
+        if settings is None:
+            return
+        try:
+            settings.theme = str(self.theme_combo.currentData())
+            settings.output_folder = self.folder_edit.text().strip()
+            settings.show_timestamps = self.timestamps_check.isChecked()
+            settings.autoscroll = self.autoscroll_check.isChecked()
+            settings.accelerator = str(self.accelerator_combo.currentData())
+            settings.chunk_duration = self.chunk_spin.value()
+            settings.max_buffer_duration = self.buffer_spin.value()
+            settings.agreement_runs = self.agreement_spin.value()
+            settings.vad_enabled = self.vad_check.isChecked()
+            settings.vad_threshold = self.vad_spin.value()
+            settings.min_silence_duration_ms = self.silence_spin.value()
+            settings.min_speech_duration_ms = self.speech_spin.value()
+            settings.beam_size = self.beam_spin.value()
+            settings.cpu_threads = self.threads_spin.value()
+            settings.save()
+        except Exception:
+            logger.exception("Could not save settings")
+
+        if hasattr(self.main_window, "apply_settings"):
+            self.main_window.apply_settings()
+
+    def accept(self) -> None:
+        self._store_values()
+        super().accept()
+
+    def reject(self) -> None:
+        # Close is the only button, so treat it as "keep what I changed": every
+        # control here either applies live or is harmless, and silently
+        # discarding a deliberate change is the more surprising behaviour.
+        self._store_values()
+        super().reject()
 
     # -- general ----------------------------------------------------------
 
@@ -96,15 +178,171 @@ class SettingsDialog(QDialog):
         self.accelerator_combo.addItem("Automatico", Accelerator.AUTO)
         self.accelerator_combo.addItem("Solo CPU", Accelerator.CPU)
         self.accelerator_combo.addItem("GPU NVIDIA", Accelerator.GPU)
+        self._restrict_accelerator_choices()
         form.addRow("Elaborazione", self.accelerator_combo)
 
         form.addRow(QLabel(""))
-        models_label = QLabel(self._models_summary())
-        models_label.setObjectName("Hint")
-        models_label.setWordWrap(True)
-        form.addRow("Modelli", models_label)
+        self.models_label = QLabel(self._models_summary())
+        self.models_label.setObjectName("Hint")
+        self.models_label.setWordWrap(True)
+        form.addRow("Modelli", self.models_label)
+
+        speed_row = QHBoxLayout()
+        self.speed_button = QPushButton("Misura la velocità")
+        self.speed_button.clicked.connect(self._measure_speed)
+        self.speed_label = QLabel(self._speed_summary())
+        self.speed_label.setObjectName("Hint")
+        self.speed_label.setWordWrap(True)
+        speed_row.addWidget(self.speed_button)
+        speed_row.addWidget(self.speed_label, 1)
+        speed_widget = QWidget()
+        speed_widget.setLayout(speed_row)
+        form.addRow("Velocità", speed_widget)
 
         return page
+
+    def _speed_summary(self) -> str:
+        """What has been measured on this machine, if anything.
+
+        Shown because it is the one number that explains the app's behaviour on
+        a PC without a GPU, and because "measured here" is a very different
+        claim from "should be about".
+        """
+        settings = self._settings()
+        if settings is None:
+            return "Non misurata."
+
+        from app.transcription.calibration import StreamingCost
+        from app.transcription.hardware import select_accelerator
+
+        try:
+            choice = select_accelerator(settings.accelerator_choice)
+            cost = settings.measured_cost(
+                settings.model, choice.device, choice.compute_type
+            )
+        except Exception:
+            return "Non misurata."
+        if not cost:
+            return "Non ancora misurata su questo PC."
+
+        measured = StreamingCost(
+            model_key=settings.model,
+            device=choice.device,
+            compute_type=choice.compute_type,
+            cost=cost,
+            audio_seconds=0.0,
+            runs=1,
+        )
+        return measured.summary
+
+    def _settings(self):
+        return getattr(self.main_window, "app_settings", None)
+
+    @Slot()
+    def _measure_speed(self) -> None:
+        """Measure the configured model on this machine, and store the result."""
+        from app.ui.speed_dialog import SpeedTestDialog
+
+        settings = self._settings()
+        if settings is None:
+            return
+
+        if not models.is_available(settings.model):
+            self.speed_label.setText(
+                "Scarica prima un modello: la misura usa quello configurato."
+            )
+            return
+
+        dialog = SpeedTestDialog(
+            settings.model,
+            accelerator=settings.accelerator_choice,
+            parent=self,
+        )
+        dialog.exec()
+
+        measured = dialog.result
+        if measured is None or not measured.is_usable:
+            self.speed_label.setText(self._speed_summary())
+            return
+
+        settings.remember_measurement(
+            measured.model_key, measured.device, measured.compute_type, measured.cost
+        )
+        settings.save()
+        self.speed_label.setText(measured.summary)
+        self._offer_lighter_model(measured)
+
+    def _offer_lighter_model(self, measured) -> None:
+        """Propose a model that fits, and let the user decide.
+
+        Switching on their behalf would change the quality of their transcripts
+        without asking; saying nothing would leave them with a model that cannot
+        keep up. So: offer, and do it only on a yes.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.transcription.calibration import Verdict, suggest_model
+
+        if measured.verdict is not Verdict.TOO_SLOW:
+            return
+        suggested = suggest_model(measured)
+        if suggested == measured.model_key:
+            return
+
+        settings = self._settings()
+        spec = models.get_spec(suggested)
+        answer = QMessageBox.question(
+            self,
+            "Modello troppo pesante",
+            f"{models.get_spec(measured.model_key).display_name} non riesce a "
+            f"stare al passo su questo PC.\n\nVuoi passare a "
+            f"{spec.display_name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes or settings is None:
+            return
+
+        settings.model = suggested
+        settings.save()
+        if hasattr(self.main_window, "select_model"):
+            self.main_window.select_model(suggested)
+        self.models_label.setText(self._models_summary())
+        self.speed_label.setText(self._speed_summary())
+
+    def _restrict_accelerator_choices(self) -> None:
+        """Grey out "GPU NVIDIA" when it cannot do anything, and say why.
+
+        A setting that can be selected and then silently does nothing is worse
+        than one that is missing: the user changes it, sees no difference, and
+        concludes the app is broken rather than that their PC has no NVIDIA card.
+        """
+        from app.transcription.hardware import gpu_availability
+
+        try:
+            availability = gpu_availability()
+        except Exception:
+            return
+
+        index = self.accelerator_combo.findData(Accelerator.GPU)
+        if index < 0:
+            return
+
+        model = self.accelerator_combo.model()
+        item = model.item(index) if hasattr(model, "item") else None
+        if availability.usable:
+            if item is not None:
+                item.setToolTip(availability.reason)
+            return
+
+        if item is not None:
+            item.setEnabled(False)
+            item.setToolTip(availability.reason)
+        self.accelerator_combo.setToolTip(availability.reason)
+        if self.accelerator_combo.currentIndex() == index:
+            self.accelerator_combo.setCurrentIndex(
+                self.accelerator_combo.findData(Accelerator.AUTO)
+            )
 
     def _models_summary(self) -> str:
         installed = models.installed_models()
