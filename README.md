@@ -11,14 +11,14 @@ network switched off.
 
 ## Download
 
-Two builds. Both are portable folders: unzip anywhere, run
-`LiveTranscriber.exe`. Nothing is installed — no Python, no CUDA Toolkit, no
+Get them from the [latest release](https://github.com/LorenzoLubrano/LiveTranscriber/releases/latest).
+Both are portable folders: unzip anywhere, run `LiveTranscriber.exe`. Nothing is installed — no Python, no CUDA Toolkit, no
 Visual C++ redistributable.
 
 | | Download | Size | Use it if |
 |---|---|---|---|
-| **Any PC** | `LiveTranscriber-1.0.0-windows-x64.zip` | 336 MB | You have no NVIDIA graphics card, or you are not sure |
-| **NVIDIA** | `LiveTranscriber-1.0.0-windows-x64-nvidia.zip` | 2.3 GB | You have an NVIDIA GeForce or RTX card |
+| **Any PC** | `LiveTranscriber-1.0.0-windows-x64.zip` | 127 MB (329 MB unpacked) | You have no NVIDIA graphics card, or you are not sure |
+| **NVIDIA** | `LiveTranscriber-1.0.0-windows-x64-nvidia.zip` | 1.4 GB (2.3 GB unpacked) | You have an NVIDIA GeForce or RTX card |
 
 The NVIDIA build is large because it carries the CUDA runtime; it does the same
 job several times faster. The plain build runs on any 64-bit Windows PC,

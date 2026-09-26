@@ -437,3 +437,34 @@ def test_settings_survive_a_restart(qtbot, tmp_path, monkeypatch):
     window._persist_settings()
     assert saved == [True]
     assert settings.show_timestamps is True
+
+
+def test_a_measured_cpu_gets_a_model_it_can_keep_up_with(qtbot, monkeypatch):
+    """End to end: a stored measurement overrides the hardware guess.
+
+    The preset for a CPU machine is `base`; a machine measured at 0.9 for `base`
+    must not be handed it, because that is the case the whole calibration exists
+    to catch.
+    """
+    from app.config.settings import AppSettings
+    from app.transcription.hardware import Accelerator, AcceleratorChoice
+    from app.ui.main_window import MainWindow
+
+    settings = AppSettings()
+    settings.accelerator = str(Accelerator.CPU)
+    settings.remember_measurement("base", "cpu", "int8", 0.9)
+
+    monkeypatch.setattr(
+        "app.transcription.hardware.select_accelerator",
+        lambda *a, **k: AcceleratorChoice(
+            device="cpu", compute_type="int8", cpu_threads=4
+        ),
+    )
+
+    window = MainWindow(settings)
+    qtbot.addWidget(window)
+    assert window._default_model() == "tiny"
+
+    # Without the measurement, the same machine gets the preset.
+    settings.speed_measurements = ""
+    assert window._default_model() == "base"
