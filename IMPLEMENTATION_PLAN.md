@@ -342,7 +342,7 @@ Real recording, then a simulated crash:
 A previous completed recording next to the crashed one is provably untouched,
 and *Ignora* stops the prompt without deleting anything.
 
-410 tests passing (24 hardware tests deselected), `ruff` clean.
+434 tests passing (24 hardware tests deselected), `ruff` clean.
 
 
 ## Milestone 7 — Robustness
@@ -396,7 +396,9 @@ measures the machine so it does not choose an impossible model in the first plac
 
 - [x] `scripts/LiveTranscriber.spec` — one-dir bundle, ~45 unused Qt modules excluded
 - [x] `scripts/build_windows.ps1` — tests, build, licences, archive
-- [x] Two variants: any-PC (329 MB, 127 MB zipped) and NVIDIA (2335 MB, 1.41 GiB zipped)
+- [x] One download for everybody (329 MB, 128 MB zipped) plus an optional
+      NVIDIA pack the app fetches on request (527 MB)
+- [x] A pre-packaged NVIDIA variant for offline machines (1065 MB, 655 MB zipped)
 - [x] `app/selftest.py` — `--selftest` from the packaged build
 - [x] Both packaged builds verified on this machine
 - [x] GitHub Actions running lint plus the non-hardware suite on `windows-latest`
@@ -414,8 +416,32 @@ LiveTranscriber-GPU\LiveTranscriber.exe --selftest
   Velocita'    : small: 6.4x il tempo reale (va bene)
 ```
 
-The NVIDIA archive at 1.41 GiB fits under GitHub's 2 GiB per-asset limit; the
-build script checks and warns if a future change pushes it over.
+### What the GPU actually needs
+
+The NVIDIA build carried 2335 MB, of which 1093 MB was the cuDNN wheel. Listing
+the libraries actually mapped during GPU transcription — real speech, three
+model architectures — gives three files:
+
+| library | size | from |
+|---|---|---|
+| `cublasLt64_12.dll` | 638 MB | the nvidia-cublas wheel |
+| `cublas64_12.dll` | 98 MB | the nvidia-cublas wheel |
+| `cudnn64_9.dll` | 0.3 MB | shipped inside CTranslate2 itself |
+
+`ctranslate2.dll` names no cuDNN library at all in its imports. So cuDNN came
+out of the bundle and out of the `gpu` extra, and the 736 MB that remain became
+a pack the app downloads on request.
+
+Verified in isolation, with the downloaded pack temporarily moved aside:
+
+| build | pack | result |
+|---|---|---|
+| universal | installed | GPU NVIDIA RTX 5050, 9.7x real time |
+| universal | absent | CPU, with the message offering the download |
+| NVIDIA (trimmed) | absent | GPU NVIDIA RTX 5050, 9.8x real time |
+
+The archives fit well under GitHub's 2 GiB per-asset limit; the build script
+checks and warns if a future change pushes one over.
 
 ---
 
