@@ -35,6 +35,10 @@ hf_cache/
 *.vtt
 scripts/out/
 
+# Generated while judging the icon, not part of the project
+assets/icon-sheet.png
+assets/_*.png
+
 # OS / editor
 Thumbs.db
 desktop.ini

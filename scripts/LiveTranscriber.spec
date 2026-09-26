@@ -44,6 +44,14 @@ hiddenimports = [
 # -- faster-whisper: the bundled Silero VAD model is data, not an import ----
 datas += collect_data_files("faster_whisper", includes=["assets/*"])
 
+# -- the application icon --------------------------------------------------
+# On the .exe below for Explorer, and here as a file so the running window and
+# its taskbar button can use it too.
+for icon_name in ("icon.ico", "icon-512.png"):
+    icon_path = ROOT / "assets" / icon_name
+    if icon_path.exists():
+        datas.append((str(icon_path), "assets"))
+
 # -- native extensions -----------------------------------------------------
 for package in ("ctranslate2", "onnxruntime", "pyaudiowpatch", "soxr", "av"):
     try:

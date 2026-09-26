@@ -18,6 +18,25 @@ from app.utils.paths import ensure_app_dirs
 logger = logging.getLogger(__name__)
 
 
+def _set_application_icon(app) -> None:
+    """Give the window and the taskbar the app's own icon.
+
+    PyInstaller puts the icon on the .exe, which covers Explorer, but a running
+    Qt window keeps Qt's default unless it is set here — so the taskbar button
+    and the Alt-Tab card would show a generic icon while the file shows ours.
+    """
+    from PySide6.QtGui import QIcon
+
+    from app.utils.paths import bundle_dir
+
+    for name in ("icon.ico", "icon-512.png"):
+        candidate = bundle_dir() / "assets" / name
+        if candidate.exists():
+            app.setWindowIcon(QIcon(str(candidate)))
+            return
+    logger.info("No application icon found; using the default")
+
+
 def _install_exception_hook(app) -> None:
     """Report crashes instead of vanishing.
 
@@ -75,6 +94,7 @@ def main() -> int:
     app.setOrganizationName("LiveTranscriber")
     app.setApplicationDisplayName("LiveTranscriber")
 
+    _set_application_icon(app)
     _install_exception_hook(app)
     logger.info("LiveTranscriber starting; log at %s", log_path)
 
