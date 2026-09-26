@@ -215,28 +215,50 @@ def _check_speed(report: Report, key: str) -> None:
     try:
         from app.transcription.calibration import CalibrationError, measure_streaming_cost
 
+        # Twice, keeping the worse. One measurement is taken at whatever clock
+        # the CPU happens to be boosting to: the same model on this machine read
+        # 0.71 and 0.90 on consecutive runs, which straddles the threshold and
+        # made this check report a different verdict each time. A diagnostic that
+        # flips is worse than no diagnostic.
         try:
-            measured = measure_streaming_cost(key, target_seconds=12.0)
+            runs = [measure_streaming_cost(key), measure_streaming_cost(key)]
         except CalibrationError as exc:
             report.add("Velocita'", True, f"non misurabile: {exc.user_message}")
             return
 
-        if not measured.is_usable:
+        usable = [m for m in runs if m.is_usable]
+        if not usable:
             report.add(
                 "Velocita'", False, "la misura non ha prodotto alcuna inferenza",
                 "Il rilevamento della voce o il modello non stanno funzionando.",
             )
             return
 
+        measured = max(usable, key=lambda m: m.cost)
+        best = min(usable, key=lambda m: m.cost)
+        detail = (
+            f"{key}: {measured.headroom:.1f}x il tempo reale "
+            f"({measured.verdict.label})"
+        )
+        # Only when the two runs really disagree, not when they round the same.
+        if best.cost > 0 and measured.cost / best.cost > 1.1:
+            detail += f"; nella prova migliore {best.headroom:.1f}x"
+        if (
+            measured.verdict.value != "too_slow"
+            and measured.verdict_for(2).value == "too_slow"
+        ):
+            detail += "; con PC e microfono insieme il costo raddoppia"
+
+        # Fails only when the machine is genuinely slower than the audio. A model
+        # with a thin margin is a note, not a fault: it works, and the app says
+        # so while recording if it stops working.
         report.add(
             "Velocita'",
-            measured.verdict.value != "too_slow",
-            f"{key}: {measured.headroom:.1f}x il tempo reale ({measured.verdict.label})"
-            + ("; con PC e microfono insieme il costo raddoppia"
-               if measured.verdict_for(2).value == "too_slow"
-               and measured.verdict.value != "too_slow" else ""),
-            "Questo modello e' troppo pesante per questo PC: scegline uno piu' "
-            "leggero, altrimenti il testo arriva con molto ritardo.",
+            measured.cost < 1.0,
+            detail,
+            "Questo modello e' piu' lento del tempo reale su questo PC: "
+            "scegline uno piu' leggero, altrimenti il testo arriva con ritardo "
+            "crescente.",
         )
     except Exception as exc:
         report.add("Velocita'", False, f"{type(exc).__name__}: {exc}")
