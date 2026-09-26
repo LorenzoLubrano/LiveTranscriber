@@ -7,6 +7,12 @@ Everything runs **on your machine**. No cloud speech-to-text, no API keys, no
 account, no telemetry. After the first model download the app works with the
 network switched off.
 
+![LiveTranscriber transcribing a lecture](docs/screenshot-dark.png)
+
+<sub>A real recording, captured from the running app: Windows' speech
+synthesiser reading a physics passage through the speakers, transcribed live
+through WASAPI loopback. Light theme: [screenshot-light.png](docs/screenshot-light.png)</sub>
+
 ---
 
 ## Download

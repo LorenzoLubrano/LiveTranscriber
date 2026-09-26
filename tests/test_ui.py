@@ -468,3 +468,43 @@ def test_a_measured_cpu_gets_a_model_it_can_keep_up_with(qtbot, monkeypatch):
     # Without the measurement, the same machine gets the preset.
     settings.speed_measurements = ""
     assert window._default_model() == "base"
+
+
+def test_changing_theme_redraws_the_transcript(qtbot):
+    """Text keeps the colour it was inserted with, so a theme change must redraw.
+
+    Without this the transcript stayed dark-grey on a dark page after switching
+    to the dark theme: still there, effectively unreadable.
+    """
+    from app.sessions.transcript import Source
+    from app.ui.main_window import MainWindow
+    from app.ui.theme import DARK, LIGHT, ThemeMode
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.set_theme(ThemeMode.LIGHT)
+    window.transcript.add(Source.PC, 0.0, 2.0, "Una frase di prova.")
+    window.transcript_view.rebuild(window.transcript.segments)
+
+    def ink_colours() -> set[str]:
+        document = window.transcript_view.document()
+        found = set()
+        block = document.begin()
+        while block.isValid():
+            for fragment in block.begin():
+                if fragment.fragment().isValid():
+                    colour = fragment.fragment().charFormat().foreground().color()
+                    found.add(colour.name().lower())
+            block = block.next()
+        return found
+
+    light_inks = ink_colours()
+    assert light_inks
+
+    window.set_theme(ThemeMode.DARK)
+    dark_inks = ink_colours()
+
+    assert dark_inks != light_inks
+    assert LIGHT.ink.lower() not in dark_inks
+    assert DARK.ink.lower() in dark_inks
