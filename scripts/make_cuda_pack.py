@@ -20,7 +20,6 @@ what :mod:`app.transcription.cuda_setup` looks for::
 from __future__ import annotations
 
 import hashlib
-import shutil
 import sys
 import tempfile
 import zipfile

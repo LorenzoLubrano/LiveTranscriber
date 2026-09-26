@@ -18,7 +18,7 @@ from app.transcription import cuda_pack
 
 def complete_pack(extra: dict[str, bytes] | None = None) -> bytes:
     """An archive shaped like the real one: both libraries present."""
-    entries = {name: b"fake dll" for name in cuda_pack.REQUIRED}
+    entries = dict.fromkeys(cuda_pack.REQUIRED, b"fake dll")
     entries.update(extra or {})
     return make_zip(entries)
 
