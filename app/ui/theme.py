@@ -229,9 +229,13 @@ def system_prefers_dark() -> bool:
 
 def stylesheet(p: Palette) -> str:
     """Qt stylesheet for the whole application."""
+    from app.ui.glyphs import arrow_images, tick_image
+
     ui = TYPE.ui_fallback
     reading = TYPE.reading_fallback
     mono = TYPE.mono_fallback
+    up_arrow, down_arrow = arrow_images(p.ink_soft)
+    tick = tick_image(p.on_accent)
 
     return f"""
 /* ---------- base ---------- */
@@ -257,6 +261,10 @@ QRadioButton, QCheckBox {{ background: transparent; }}
     border-radius: 10px;
 }}
 
+/* A panel that is also a choice (the first-run cards) wears the focus colour
+   while it is the chosen one. */
+#InstrumentPanel[selected="true"] {{ border: 1px solid {p.focus}; }}
+
 #SummaryBar {{
     background: {p.instrument};
     border: 1px solid {p.border};
@@ -279,13 +287,15 @@ QRadioButton, QCheckBox {{ background: transparent; }}
     font-size: {TYPE.small}pt;
 }}
 
+/* These two say where the work runs and where the audio stays. They are
+   statements, not controls, and while they wore a border and a raised surface
+   they were louder than the only real button next to them. */
 #StatusChip {{
     color: {p.ink_soft};
     font-size: {TYPE.small}pt;
-    padding: 3px 8px;
-    border: 1px solid {p.border};
-    border-radius: 9px;
-    background: {p.raised};
+    padding: 3px 0;
+    border: none;
+    background: transparent;
 }}
 
 /* ---------- the door: the home page ---------- */
@@ -353,10 +363,20 @@ QComboBox {{
 QComboBox:hover {{ background: {p.raised_hover}; }}
 QComboBox:focus {{ border: 2px solid {p.focus}; padding: 6px 9px; }}
 QComboBox:disabled {{ color: {p.ink_faint}; background: {p.window}; }}
-/* The CSS transparent-border triangle renders as a stray dash under Qt's
-   style engine, and styling ::drop-down at all suppresses the style's own
-   arrow. Both sub-controls are therefore left alone so Fusion draws a real
-   arrow; only the width is reserved, via padding on the box above. */
+/* Styling ::drop-down suppresses the style's own arrow, and the CSS
+   transparent-border triangle renders as a stray dash under Qt, so the arrow
+   was left to Fusion: a dark block with its own edge at the end of every menu.
+   With a drawn chevron available (app/ui/glyphs.py) the menus use the same mark
+   as the numeric fields, and it turns over while the list is open. */
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 24px;
+    border: none;
+    background: transparent;
+}}
+QComboBox::down-arrow {{ image: url({down_arrow}); width: 10px; height: 10px; }}
+QComboBox::down-arrow:on {{ image: url({up_arrow}); }}
 QComboBox QAbstractItemView {{
     background: {p.raised};
     border: 1px solid {p.border_strong};
@@ -406,17 +426,14 @@ QCheckBox::indicator:hover {{ border-color: {p.ink_faint}; }}
 QCheckBox::indicator:checked {{
     background: {p.focus};
     border: 2px solid {p.focus};
+    image: url({tick});
 }}
+/* The native dotted focus rectangle is switched off, so focus has to show on
+   the indicator itself or a keyboard user cannot tell where they are. A
+   selected radio already marks its group's focus: arrows move both at once. */
 QRadioButton:focus, QCheckBox:focus {{ outline: none; }}
-
-QSpinBox, QDoubleSpinBox {{
-    background: {p.raised};
-    border: 1px solid {p.border_strong};
-    border-radius: 7px;
-    padding: 6px 8px;
-    color: {p.ink};
-}}
-QSpinBox:focus, QDoubleSpinBox:focus {{ border: 2px solid {p.focus}; padding: 5px 7px; }}
+QRadioButton::indicator:focus, QCheckBox::indicator:focus {{ border-color: {p.focus}; }}
+QCheckBox::indicator:checked:focus {{ border-color: {p.ink}; }}
 
 /* ---------- buttons ---------- */
 QPushButton {{
@@ -449,18 +466,76 @@ QPushButton#PrimaryButton:focus {{ border: 2px solid {p.ink}; padding: 12px 25px
 QPushButton#QuietButton {{
     background: transparent;
     border: 1px solid transparent;
-    color: {p.ink_soft};
+    color: {p.ink};
     padding: 6px 10px;
 }}
 QPushButton#QuietButton:hover {{ background: {p.raised_hover}; color: {p.ink}; }}
 QPushButton#QuietButton:focus {{ border: 2px solid {p.focus}; padding: 5px 9px; }}
+QPushButton#QuietButton:checked {{
+    background: {p.raised};
+    border: 1px solid {p.border_strong};
+    color: {p.ink};
+}}
+
+/* The accepting button in a dialog. The big record-red button would shout
+   here; this one only has to be the first thing the eye lands on. */
+QPushButton#DialogPrimary {{
+    background: {p.focus};
+    border: 1px solid {p.focus};
+    color: {p.on_accent};
+    font-weight: 600;
+}}
+QPushButton#DialogPrimary:hover {{ background: {p.tag_pc}; border-color: {p.tag_pc}; }}
+QPushButton#DialogPrimary:disabled {{
+    background: {p.raised}; border-color: {p.border}; color: {p.ink_faint};
+}}
+QPushButton#DialogPrimary:focus {{ border: 2px solid {p.ink}; padding: 7px 15px; }}
+
+QAbstractSpinBox {{
+    background: {p.raised};
+    border: 1px solid {p.border_strong};
+    border-radius: 7px;
+    padding: 7px 22px 7px 10px;
+    min-height: 18px;
+    color: {p.ink};
+    selection-background-color: {p.focus};
+    selection-color: {p.on_accent};
+}}
+QAbstractSpinBox:hover {{ background: {p.raised_hover}; }}
+QAbstractSpinBox:focus {{ border: 2px solid {p.focus}; padding: 6px 21px 6px 9px; }}
+QAbstractSpinBox:disabled {{ color: {p.ink_faint}; background: {p.window}; }}
+/* Styling these buttons makes Qt stop drawing their arrows, so the arrows
+   are supplied: see app/ui/glyphs.py. */
+QAbstractSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    border: none;
+    border-left: 1px solid {p.border};
+    border-top-right-radius: 7px;
+    background: transparent;
+}}
+QAbstractSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 22px;
+    border: none;
+    border-left: 1px solid {p.border};
+    border-bottom-right-radius: 7px;
+    background: transparent;
+}}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{
+    background: {p.border};
+}}
+QAbstractSpinBox::up-arrow {{ image: url({up_arrow}); width: 10px; height: 10px; }}
+QAbstractSpinBox::down-arrow {{ image: url({down_arrow}); width: 10px; height: 10px; }}
 
 /* ---------- the page: transcript ---------- */
 #TranscriptView {{
     background: {p.page};
     border: 1px solid {p.border};
     border-radius: 10px;
-    padding: 18px 22px;
+    padding: 18px 18px;
     font-family: {reading};
     font-size: {TYPE.reading}pt;
     color: {p.ink};
@@ -524,8 +599,8 @@ QGroupBox::title {{
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {p.border};
-    border-radius: 9px;
+    border: none;
+    border-top: 1px solid {p.border};
     top: -1px;
 }}
 QTabBar::tab {{

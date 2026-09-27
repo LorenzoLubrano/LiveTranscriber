@@ -60,6 +60,9 @@ class SettingsDialog(QDialog):
         layout.addWidget(tabs, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        # Qt's own translation of "Close" is not installed with the app, so the
+        # one English word in the interface appeared right here.
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText("Chiudi")
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
@@ -158,6 +161,7 @@ class SettingsDialog(QDialog):
         form.addRow("Aspetto", self.theme_combo)
 
         folder_row = QHBoxLayout()
+        folder_row.setContentsMargins(0, 0, 0, 0)
         self.folder_edit = QLineEdit()
         self.folder_edit.setReadOnly(True)
         browse = QPushButton("Cambia")
@@ -181,6 +185,7 @@ class SettingsDialog(QDialog):
         self._restrict_accelerator_choices()
 
         accelerator_row = QHBoxLayout()
+        accelerator_row.setContentsMargins(0, 0, 0, 0)
         accelerator_row.addWidget(self.accelerator_combo, 1)
         self.cuda_button = QPushButton("Attiva la GPU…")
         self.cuda_button.clicked.connect(self._install_cuda_pack)
@@ -195,13 +200,18 @@ class SettingsDialog(QDialog):
         form.addRow("", self.accelerator_hint)
         self._sync_accelerator_hint()
 
-        form.addRow(QLabel(""))
+        # A pause between what you choose and what the app reports. It was a
+        # whole empty row, which read as something that had failed to load.
+        pause = QWidget()
+        pause.setFixedHeight(6)
+        form.addRow(pause)
         self.models_label = QLabel(self._models_summary())
         self.models_label.setObjectName("Hint")
         self.models_label.setWordWrap(True)
         form.addRow("Modelli", self.models_label)
 
         speed_row = QHBoxLayout()
+        speed_row.setContentsMargins(0, 0, 0, 0)
         self.speed_button = QPushButton("Misura la velocità")
         self.speed_button.clicked.connect(self._measure_speed)
         self.speed_label = QLabel(self._speed_summary())
@@ -484,6 +494,20 @@ class SettingsDialog(QDialog):
         self.threads_spin.setValue(0)
         self.threads_spin.setSpecialValueText("Automatico")
         form.addRow("Thread CPU", self.threads_spin)
+
+        # A field holding "2" does not need the width of the window. At one
+        # width they also read as a column of numbers that can be compared.
+        for spin in (
+            self.chunk_spin,
+            self.buffer_spin,
+            self.agreement_spin,
+            self.vad_spin,
+            self.silence_spin,
+            self.speech_spin,
+            self.beam_spin,
+            self.threads_spin,
+        ):
+            spin.setFixedWidth(150)
 
         outer.addLayout(form)
         outer.addStretch(1)

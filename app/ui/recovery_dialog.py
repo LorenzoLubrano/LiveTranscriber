@@ -79,7 +79,7 @@ class RecoveryDialog(QDialog):
         self.recover_button = buttons.addButton(
             "Recupera", QDialogButtonBox.ButtonRole.AcceptRole
         )
-        self.recover_button.setObjectName("PrimaryButton")
+        self.recover_button.setObjectName("DialogPrimary")
         self.ignore_button = buttons.addButton(
             "Ignora", QDialogButtonBox.ButtonRole.DestructiveRole
         )

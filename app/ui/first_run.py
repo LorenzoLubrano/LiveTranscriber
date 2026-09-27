@@ -90,6 +90,7 @@ class FirstRunDialog(QDialog):
         self.continue_button = buttons.addButton(
             "Continua", QDialogButtonBox.ButtonRole.AcceptRole
         )
+        self.continue_button.setObjectName("DialogPrimary")
         buttons.addButton("Scelgo dopo", QDialogButtonBox.ButtonRole.RejectRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -194,6 +195,17 @@ class FirstRunDialog(QDialog):
         # Clicking anywhere on the card selects it: a 16 px radio dot is a small
         # target, and the card is the thing that looks clickable.
         frame.mousePressEvent = lambda event, b=button: b.setChecked(True)  # type: ignore[method-assign]
+        frame.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # The whole card says which one is chosen, not only its 16 px dot: three
+        # identical boxes made the eye hunt for the answer.
+        def mark(checked: bool, card: QFrame = frame) -> None:
+            card.setProperty("selected", "true" if checked else "false")
+            card.style().unpolish(card)
+            card.style().polish(card)
+
+        button.toggled.connect(mark)
+        mark(button.isChecked())
         return frame
 
     def _privacy_note(self) -> QLabel:

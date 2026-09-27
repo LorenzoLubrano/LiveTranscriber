@@ -26,6 +26,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetricsF,
     QKeySequence,
     QShortcut,
     QTextCharFormat,
@@ -35,6 +36,13 @@ from PySide6.QtWidgets import QTextEdit, QWidget
 
 from app.sessions.transcript import Source, format_timestamp
 from app.ui.theme import TYPE, Palette
+
+#: How many characters a line of transcript may run to. Typographic practice
+#: puts comfortable reading between 45 and 75 characters; a serif face carries
+#: the upper end. Without a limit the text simply filled the window, which on a
+#: maximised 16:9 screen meant lines of 110 characters and a reader who loses
+#: the start of the next line.
+MEASURE_CHARACTERS = 78
 
 
 class TranscriptView(QTextEdit):
@@ -61,6 +69,8 @@ class TranscriptView(QTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFrameShape(QTextEdit.Shape.NoFrame)
+        # Wrapping at a width we choose rather than at the window edge.
+        self.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
 
         self._apply_document_style()
         self._install_shortcuts()
@@ -75,6 +85,15 @@ class TranscriptView(QTextEdit):
         # Paragraph spacing lives in the block format; line height is set per
         # block as text is appended.
         self.document().setDocumentMargin(0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._keep_the_measure()
+
+    def _keep_the_measure(self) -> None:
+        """Wrap at the measure, or at the window if the window is narrower."""
+        ideal = int(QFontMetricsF(self.font()).averageCharWidth() * MEASURE_CHARACTERS)
+        self.setLineWrapColumnOrWidth(max(160, min(ideal, self.viewport().width())))
 
     def _install_shortcuts(self) -> None:
         # Ctrl+A and Ctrl+C come free with a read-only QTextEdit; Ctrl+F is ours.

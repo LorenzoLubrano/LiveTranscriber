@@ -809,3 +809,103 @@ def test_recovering_a_session_shows_what_was_recovered(qtbot, monkeypatch):
     window.offer_recovery()
 
     assert not window.on_home
+
+
+# -- visual consistency ----------------------------------------------------
+
+def test_the_drawn_marks_exist_and_are_reused():
+    """Qt shows no arrow or tick at all once those parts are styled without one."""
+    from pathlib import Path
+
+    from app.ui.glyphs import arrow_images, tick_image
+    from app.ui.theme import DARK, LIGHT
+
+    up, down = arrow_images(DARK.ink_soft)
+    tick = tick_image(DARK.on_accent)
+    for image in (up, down, tick):
+        assert Path(image).stat().st_size > 0
+        assert "\\" not in image, "a backslash is an escape inside url()"
+
+    assert arrow_images(DARK.ink_soft) == (up, down), "drawn once per colour"
+    assert arrow_images(LIGHT.ink_soft) != (up, down), "each theme gets its own ink"
+
+
+def test_the_stylesheet_points_at_the_drawn_marks():
+    from app.ui.glyphs import arrow_images, tick_image
+
+    css = stylesheet(DARK)
+    up, down = arrow_images(DARK.ink_soft)
+    assert f"url({up})" in css and f"url({down})" in css
+    assert f"url({tick_image(DARK.on_accent)})" in css
+
+
+def test_a_toggle_shows_whether_it_is_on():
+    """Orari and Segui are toggles; on and off used to look identical."""
+    assert "QPushButton#QuietButton:checked" in stylesheet(DARK)
+
+
+def test_the_window_cannot_be_made_smaller_than_its_contents(qtbot):
+    """A hard minimum below the layout's own let the setup panel overlap itself."""
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    needed = window.minimumSizeHint()
+    forced = window.minimumSize()
+
+    assert forced.isEmpty() or (
+        forced.width() >= needed.width() and forced.height() >= needed.height()
+    )
+
+
+def test_one_search_result_is_singular(qtbot):
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.transcript.add(Source.PC, 0.0, 2.0, "Il limite adiabatico.")
+    window.show_transcription()
+    window.show_search()
+    window.search_edit.setText("adiabatico")
+
+    assert window.search_result.text() == "1 risultato"
+
+
+def test_the_transcript_keeps_a_readable_measure(view, qtbot):
+    """Lines stop near 78 characters however wide the window is."""
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QTextEdit
+
+    from app.ui.widgets.transcript_view import MEASURE_CHARACTERS
+
+    ideal = QFontMetricsF(view.font()).averageCharWidth() * MEASURE_CHARACTERS
+
+    # Wrapping at the widget edge reports a width of 0, which any "at most"
+    # check would wave through; so the mode and the exact width are asserted.
+    assert view.lineWrapMode() is QTextEdit.LineWrapMode.FixedPixelWidth
+
+    view.resize(2000, 400)
+    view.show()
+    qtbot.waitExposed(view)
+    assert abs(view.lineWrapColumnOrWidth() - ideal) <= 1
+
+    view.resize(420, 400)
+    qtbot.wait(10)
+    assert view.lineWrapColumnOrWidth() == view.viewport().width(), (
+        "on a narrow window the text wraps at the window, never past it"
+    )
+
+
+def test_the_settings_close_button_is_in_italian(qtbot):
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    from app.ui.main_window import MainWindow
+    from app.ui.settings_window import SettingsDialog
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    dialog = SettingsDialog(window)
+    qtbot.addWidget(dialog)
+
+    box = dialog.findChild(QDialogButtonBox)
+    assert box.button(QDialogButtonBox.StandardButton.Close).text() == "Chiudi"

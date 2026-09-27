@@ -100,6 +100,7 @@ class CudaPackDialog(QDialog):
 
         buttons = QHBoxLayout()
         self.action_button = QPushButton("Scarica")
+        self.action_button.setObjectName("DialogPrimary")
         self.action_button.clicked.connect(self._start)
         self.close_button = QPushButton("Chiudi")
         self.close_button.clicked.connect(self.reject)

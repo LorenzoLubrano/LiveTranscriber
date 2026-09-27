@@ -19,10 +19,11 @@ ever runs here.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QAction, QCloseEvent, QFontMetricsF, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -105,7 +106,10 @@ class MainWindow(QMainWindow):
         self._microphones: list[AudioDevice] = []
 
         self.setWindowTitle("LiveTranscriber")
-        self.setMinimumSize(560, 520)
+        # No hard minimum: the one that was here (560x520) was smaller than the
+        # setup panel's own minimum, and Qt answered by overlapping the labels
+        # with the fields under them. The layout knows what it needs — 618x608
+        # as this is written — and keeps knowing it when the panel changes.
         self.resize(820, 780)
 
         self._build()
@@ -191,7 +195,9 @@ class MainWindow(QMainWindow):
         row.addWidget(title)
         row.addStretch(1)
         row.addWidget(self.accel_chip)
+        row.addSpacing(6)
         row.addWidget(self.privacy_chip)
+        row.addSpacing(14)
         row.addWidget(self.settings_button)
         return row
 
@@ -244,11 +250,50 @@ class MainWindow(QMainWindow):
         pair.setSpacing(14)
         self.language_combo = QComboBox()
         self.model_combo = QComboBox()
+        # Two columns of one width. A combo asks for the width of its longest
+        # entry, and "Large-v3 · Massima qualità" is a good deal longer than any
+        # language, so the quality column was eating the one beside it.
+        for combo in (self.language_combo, self.model_combo):
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo.setMinimumContentsLength(14)
         self.model_combo.setToolTip(
             "Modelli più grandi sono più precisi e più lenti."
         )
-        pair.addLayout(self._field("Lingua", self.language_combo), 1)
-        pair.addLayout(self._field("Qualità", self.model_combo), 1)
+        self.model_hint = QLabel()
+        self.model_hint.setObjectName("Hint")
+        self.model_hint.setWordWrap(True)
+        # A wrapped label asks for the width of its longest line, which made the
+        # quality column swallow the language column beside it. It takes what
+        # the column gives and wraps into it instead — keeping height-for-width,
+        # which a fresh policy drops, or a two-line hint is given the height of
+        # one and spills onto the menu above it.
+        hint_policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        hint_policy.setHeightForWidth(True)
+        self.model_hint.setSizePolicy(hint_policy)
+        # Qt works out the window's minimum height without asking wrapped text
+        # how tall it gets, so at the smallest size the hint was handed one
+        # line for two and, centred in it, climbed onto the menu. Two lines are
+        # reserved, and the text hangs from the top of them.
+        self.model_hint.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.model_hint.setMinimumHeight(
+            math.ceil(2 * QFontMetricsF(self.model_hint.font()).lineSpacing())
+        )
+
+        quality = self._field("Qualità", self.model_combo)
+        # Under the menu it describes, not at the foot of the panel: down there
+        # it read as a note about the name field it happened to sit beneath.
+        quality.addWidget(self.model_hint)
+
+        language = self._field("Lingua", self.language_combo)
+        # The hint makes the quality column taller; without this the language
+        # label and menu float to the middle of the row instead of lining up
+        # with the ones beside them.
+        language.addStretch(1)
+
+        pair.addLayout(language, 1)
+        pair.addLayout(quality, 1)
         outer.addLayout(pair)
 
         # -- title
@@ -257,11 +302,6 @@ class MainWindow(QMainWindow):
         self.title_edit.setMaxLength(80)
         self.title_edit.setToolTip("Diventa il nome della cartella della registrazione.")
         outer.addLayout(self._field("Nome (facoltativo)", self.title_edit))
-
-        self.model_hint = QLabel()
-        self.model_hint.setObjectName("Hint")
-        self.model_hint.setWordWrap(True)
-        outer.addWidget(self.model_hint)
 
         return self.setup_panel
 
@@ -272,7 +312,7 @@ class MainWindow(QMainWindow):
         self.summary_bar.hide()
 
         row = QHBoxLayout(self.summary_bar)
-        row.setContentsMargins(16, 10, 16, 10)
+        row.setContentsMargins(18, 10, 18, 10)
         row.setSpacing(10)
 
         self.summary_label = QLabel()
@@ -284,7 +324,8 @@ class MainWindow(QMainWindow):
     def _build_status_strip(self) -> QWidget:
         strip = QWidget()
         row = QHBoxLayout(strip)
-        row.setContentsMargins(4, 0, 4, 0)
+        # 19 rather than 18: an unframed row has no border to account for.
+        row.setContentsMargins(19, 0, 19, 0)
         row.setSpacing(14)
 
         self.record_dot = RecordingDot(self._palette)
@@ -322,7 +363,7 @@ class MainWindow(QMainWindow):
         self.search_bar.hide()
 
         row = QHBoxLayout(self.search_bar)
-        row.setContentsMargins(4, 0, 4, 0)
+        row.setContentsMargins(19, 0, 19, 0)
         row.setSpacing(8)
 
         self.search_edit = QLineEdit()
@@ -906,7 +947,9 @@ class MainWindow(QMainWindow):
             return
         hits = self.transcript.search(query)
         self.search_result.setText(
-            "nessun risultato" if not hits else f"{len(hits)} risultati"
+            "nessun risultato"
+            if not hits
+            else ("1 risultato" if len(hits) == 1 else f"{len(hits)} risultati")
         )
         if hits:
             self.transcript_view.find(query)
