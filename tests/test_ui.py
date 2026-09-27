@@ -460,6 +460,10 @@ def test_a_measured_cpu_gets_a_model_it_can_keep_up_with(qtbot, monkeypatch):
             device="cpu", compute_type="int8", cpu_threads=4
         ),
     )
+    # Every model on disk, stated rather than inherited: this used to depend on
+    # which ones happened to be downloaded here, and broke the day some were
+    # deleted to free space.
+    monkeypatch.setattr("app.transcription.models.is_available", lambda key: True)
 
     window = MainWindow(settings)
     qtbot.addWidget(window)
@@ -550,3 +554,50 @@ def test_the_gpu_button_appears_only_when_it_would_do_something(qtbot, monkeypat
     dialog.show()
     assert dialog.cuda_button.isVisible()
     assert dialog.accelerator_hint.text() == "motivo"
+
+
+# -- the theme, seen through Qt --------------------------------------------
+
+
+def test_palette_for_accepts_what_qt_gives_back():
+    """Qt stores a StrEnum as its string, so this gets "dark", not the member.
+
+    `palette_for` compared with `is`, which a plain string never satisfies, so
+    it silently fell through to "follow Windows" and returned the light palette
+    on a light-configured PC.
+    """
+    from app.ui.theme import DARK, LIGHT, ThemeMode, palette_for
+
+    assert palette_for("dark", system_is_dark=False) is DARK
+    assert palette_for("light", system_is_dark=True) is LIGHT
+    assert palette_for(ThemeMode.DARK, system_is_dark=False) is DARK
+    # Anything unrecognisable still follows the system rather than raising.
+    assert palette_for("nonsense", system_is_dark=True) is DARK
+
+
+def test_opening_the_settings_does_not_change_the_theme(qtbot):
+    """Reported: opening settings turned the window light, closing it fixed it.
+
+    Loading the stored value into the combo fires currentIndexChanged, which
+    applied the theme from `currentData()` — a string — and landed on the wrong
+    palette until `apply_settings()` put the real one back on close.
+    """
+    from app.config.settings import AppSettings
+    from app.ui.main_window import MainWindow
+    from app.ui.settings_window import SettingsDialog
+    from app.ui.theme import DARK, ThemeMode
+
+    settings = AppSettings()
+    settings.theme = str(ThemeMode.DARK)
+    settings.first_run_done = True
+
+    window = MainWindow(settings)
+    qtbot.addWidget(window)
+    assert window._palette is DARK
+
+    dialog = SettingsDialog(window)
+    qtbot.addWidget(dialog)
+    assert window._palette is DARK, "the theme changed just by opening settings"
+
+    dialog.reject()
+    assert window._palette is DARK

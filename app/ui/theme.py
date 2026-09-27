@@ -173,7 +173,21 @@ class Typography:
 TYPE = Typography()
 
 
-def palette_for(mode: ThemeMode, system_is_dark: bool) -> Palette:
+def palette_for(mode: ThemeMode | str, system_is_dark: bool) -> Palette:
+    """The palette for a mode, whatever form the mode arrives in.
+
+    Qt stores a StrEnum in a widget's data slot as its plain string, so
+    ``combo.currentData()`` hands back ``"dark"`` rather than ``ThemeMode.DARK``.
+    Comparing with ``is`` made that value match neither branch and fall through
+    to "follow Windows", which turned the window light every time the settings
+    dialog was opened on a light-configured PC.
+    """
+    try:
+        mode = ThemeMode(mode)
+    except ValueError:
+        # Not a mode at all: following the system is the safe reading.
+        return DARK if system_is_dark else LIGHT
+
     if mode is ThemeMode.DARK:
         return DARK
     if mode is ThemeMode.LIGHT:

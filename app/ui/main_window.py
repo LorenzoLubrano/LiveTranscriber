@@ -448,8 +448,8 @@ class MainWindow(QMainWindow):
             )
         self.accel_chip.setToolTip(describe_choice(choice))
 
-    def set_theme(self, mode: ThemeMode) -> None:
-        self._theme_mode = mode
+    def set_theme(self, mode: ThemeMode | str) -> None:
+        self._theme_mode = ThemeMode(mode)
         self._palette = palette_for(mode, system_prefers_dark())
         self._apply_theme()
 

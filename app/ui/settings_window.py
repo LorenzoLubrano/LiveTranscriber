@@ -569,6 +569,10 @@ class SettingsDialog(QDialog):
 
     @Slot()
     def _on_theme_changed(self) -> None:
-        mode = self.theme_combo.currentData()
-        if mode is not None and hasattr(self.main_window, "set_theme"):
+        # currentData() returns the string Qt stored, not the enum member.
+        try:
+            mode = ThemeMode(self.theme_combo.currentData())
+        except ValueError:
+            return
+        if hasattr(self.main_window, "set_theme"):
             self.main_window.set_theme(mode)
