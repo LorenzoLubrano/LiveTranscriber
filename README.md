@@ -19,7 +19,7 @@ through WASAPI loopback. Light theme: [screenshot-light.png](docs/screenshot-lig
 
 ## Download
 
-**`LiveTranscriber-1.0.0-windows-x64.zip`** — 127 MB, from the
+**`LiveTranscriber-1.1.0-windows-x64.zip`** — 128 MB, from the
 [latest release](https://github.com/LorenzoLubrano/LiveTranscriber/releases/latest).
 One download for every PC. Unzip anywhere and run `LiveTranscriber.exe`: nothing
 is installed, no Python, no CUDA Toolkit, no Visual C++ redistributable.
@@ -289,7 +289,7 @@ L'interfaccia dell'app è in italiano; questo README è in inglese perché il
 progetto è pubblico. In breve:
 
 - **Quale versione scaricare.** Se non hai una scheda grafica NVIDIA, prendi
-  `LiveTranscriber-1.0.0-windows-x64.zip`. Se ce l'hai, prendi quella con
+  `LiveTranscriber-1.1.0-windows-x64.zip`. Se ce l'hai, prendi quella con
   `-nvidia`: fa la stessa cosa diverse volte più veloce.
 - **Come si installa.** Non si installa: scompatti la cartella dove vuoi e apri
   `LiveTranscriber.exe`.

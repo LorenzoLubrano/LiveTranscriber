@@ -719,6 +719,7 @@ def test_the_door_is_locked_while_recording(qtbot):
 
 
 def test_the_home_page_says_where_transcription_runs(qtbot):
+    from app import __version__
     from app.ui.main_window import MainWindow
 
     window = MainWindow()
@@ -726,7 +727,7 @@ def test_the_home_page_says_where_transcription_runs(qtbot):
 
     status = window.home.status_label.text()
     assert window.accel_chip.text() in status
-    assert "1.0.0" in status
+    assert __version__ in status
 
 
 def test_the_home_page_carries_the_privacy_statement(qtbot):
