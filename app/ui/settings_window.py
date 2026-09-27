@@ -69,6 +69,17 @@ class SettingsDialog(QDialog):
 
         self._load_values()
 
+    def _show_folder(self, path: str) -> None:
+        r"""Show a path from its drive letter, with the whole of it on hover.
+
+        setText leaves the cursor at the end, and a read-only field scrolls to
+        the cursor, so a long path appeared as "sers\lollo\Documents..." — cut
+        in the middle of a word, with nothing to say more existed.
+        """
+        self.folder_edit.setText(path)
+        self.folder_edit.setCursorPosition(0)
+        self.folder_edit.setToolTip(path)
+
     # -- reading and writing the stored settings --------------------------
 
     def _load_values(self) -> None:
@@ -85,7 +96,7 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.theme_combo.setCurrentIndex(index)
 
-        self.folder_edit.setText(str(settings.output_path))
+        self._show_folder(str(settings.output_path))
         self.timestamps_check.setChecked(settings.show_timestamps)
         self.autoscroll_check.setChecked(settings.autoscroll)
 
@@ -589,7 +600,7 @@ class SettingsDialog(QDialog):
             self, "Cartella delle registrazioni", self.folder_edit.text()
         )
         if chosen:
-            self.folder_edit.setText(chosen)
+            self._show_folder(chosen)
 
     @Slot()
     def _on_theme_changed(self) -> None:

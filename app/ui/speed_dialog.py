@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from app.transcription import models
 from app.transcription.calibration import StreamingCost, Verdict
 from app.transcription.hardware import Accelerator
+from app.ui.sizing import keep_wrapped_text_whole
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ class SpeedTestDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
 
         layout = QVBoxLayout(self)
+        # A minimum width alone switches off Qt's own minimum height, so the
+        # dialog could be squeezed until its wrapped text was cut.
+        self._wrap_guard = keep_wrapped_text_whole(self)
         layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(14)
 

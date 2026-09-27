@@ -35,6 +35,7 @@ from app.transcription import models
 from app.transcription.calibration import cap_to_measurements
 from app.transcription.hardware import describe_choice, select_accelerator
 from app.transcription.models import Quality
+from app.ui.sizing import keep_wrapped_text_whole
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,9 @@ class FirstRunDialog(QDialog):
         self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
+        # A minimum width alone switches off Qt's own minimum height, so the
+        # dialog could be squeezed until its wrapped text was cut.
+        self._wrap_guard = keep_wrapped_text_whole(self)
         layout.setContentsMargins(24, 22, 24, 18)
         layout.setSpacing(14)
 

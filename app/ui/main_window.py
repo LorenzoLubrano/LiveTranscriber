@@ -19,11 +19,10 @@ ever runs here.
 from __future__ import annotations
 
 import logging
-import math
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QFontMetricsF, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -56,6 +55,7 @@ from app.sessions.transcript import Source, Transcript, format_timestamp
 from app.transcription import models
 from app.transcription.streaming import StreamingUpdate
 from app.ui.home_view import HomeView
+from app.ui.sizing import keep_wrapped_text_whole
 from app.ui.theme import (
     Palette,
     ThemeMode,
@@ -250,9 +250,9 @@ class MainWindow(QMainWindow):
         pair.setSpacing(14)
         self.language_combo = QComboBox()
         self.model_combo = QComboBox()
-        # Two columns of one width. A combo asks for the width of its longest
-        # entry, and "Large-v3 · Massima qualità" is a good deal longer than any
-        # language, so the quality column was eating the one beside it.
+        # The columns are shared by proportion, not by content: a combo asks
+        # for the width of its longest entry, and left to that the quality
+        # column took most of the row whatever the window's width.
         for combo in (self.language_combo, self.model_combo):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -272,14 +272,7 @@ class MainWindow(QMainWindow):
         hint_policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         hint_policy.setHeightForWidth(True)
         self.model_hint.setSizePolicy(hint_policy)
-        # Qt works out the window's minimum height without asking wrapped text
-        # how tall it gets, so at the smallest size the hint was handed one
-        # line for two and, centred in it, climbed onto the menu. Two lines are
-        # reserved, and the text hangs from the top of them.
         self.model_hint.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.model_hint.setMinimumHeight(
-            math.ceil(2 * QFontMetricsF(self.model_hint.font()).lineSpacing())
-        )
 
         quality = self._field("Qualità", self.model_combo)
         # Under the menu it describes, not at the foot of the panel: down there
@@ -292,8 +285,12 @@ class MainWindow(QMainWindow):
         # with the ones beside them.
         language.addStretch(1)
 
-        pair.addLayout(language, 1)
-        pair.addLayout(quality, 1)
+        # Two to three, not half and half: a language is one word, while the
+        # quality column holds entries like "Turbo · Qualità/velocità — da
+        # scaricare" and the hint under them. Equal halves cut that entry
+        # mid-word at the narrowest width.
+        pair.addLayout(language, 2)
+        pair.addLayout(quality, 3)
         outer.addLayout(pair)
 
         # -- title
@@ -302,6 +299,11 @@ class MainWindow(QMainWindow):
         self.title_edit.setMaxLength(80)
         self.title_edit.setToolTip("Diventa il nome della cartella della registrazione.")
         outer.addLayout(self._field("Nome (facoltativo)", self.title_edit))
+
+        # The hint for a model not yet downloaded runs to four lines at the
+        # narrowest width. Without this the window's minimum budgets it one or
+        # two, and the menus beside it are squeezed until their text is cut.
+        self._setup_guard = keep_wrapped_text_whole(self.setup_panel)
 
         return self.setup_panel
 
@@ -737,6 +739,8 @@ class MainWindow(QMainWindow):
                 f"{spec.description}  Il modello deve essere scaricato "
                 f"({spec.size_label}); serve la connessione una sola volta."
             )
+        # A longer hint needs more lines at the same width.
+        self._setup_guard.refresh()
 
     def _sync_device_rows(self) -> None:
         mode = self.current_mode()

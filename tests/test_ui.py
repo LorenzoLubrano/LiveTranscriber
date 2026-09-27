@@ -909,3 +909,107 @@ def test_the_settings_close_button_is_in_italian(qtbot):
 
     box = dialog.findChild(QDialogButtonBox)
     assert box.button(QDialogButtonBox.StandardButton.Close).text() == "Chiudi"
+
+
+# -- second visual pass: contrast and small windows ------------------------
+
+def _contrast(foreground: str, background: str) -> float:
+    """WCAG 2.x contrast ratio between two #RRGGBB colours."""
+
+    def luminance(colour: str) -> float:
+        channels = [int(colour.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        linear = [
+            c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
+        ]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    high, low = sorted((luminance(foreground), luminance(background)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+@pytest.mark.parametrize("palette", [DARK, LIGHT], ids=["dark", "light"])
+def test_every_text_colour_is_readable_on_every_surface(palette):
+    """WCAG AA, 4.5:1, for text at the sizes this app uses (8-13 pt).
+
+    ink_faint carries the hints, the fine print and the privacy statement. It
+    measured 2.8:1 in the light theme and 3.7:1 in the dark one.
+    """
+    surfaces = ("window", "instrument", "page", "raised")
+    for ink in ("ink", "ink_soft", "ink_faint"):
+        for surface in surfaces:
+            ratio = _contrast(getattr(palette, ink), getattr(palette, surface))
+            assert ratio >= 4.5, f"{ink} on {surface}: {ratio:.2f}"
+
+
+@pytest.mark.parametrize("palette", [DARK, LIGHT], ids=["dark", "light"])
+def test_button_labels_are_readable_at_rest_and_under_the_pointer(palette):
+    """The dark start button had white on #F05252: 3.5:1, and hover made it worse."""
+    for fill in (palette.record_fill, palette.record_fill_hover):
+        assert _contrast("#FFFFFF", fill) >= 4.5, fill
+    for fill in (palette.focus, palette.focus_hover):
+        assert _contrast(palette.on_accent, fill) >= 4.5, fill
+
+
+@pytest.mark.parametrize("palette", [DARK, LIGHT], ids=["dark", "light"])
+def test_the_suggested_dialog_button_answers_the_pointer(palette):
+    """Its hover colour was tag_pc, which is the same blue as focus: no change."""
+    assert palette.focus_hover.lower() != palette.focus.lower()
+    assert f"background: {palette.focus_hover}" in stylesheet(palette)
+
+
+def test_a_list_selection_follows_the_theme():
+    """The recovery list drew Windows' white selection bar in the dark theme."""
+    assert "QListWidget::item:selected" in stylesheet(DARK)
+
+
+def test_a_dialog_cannot_be_squeezed_until_its_text_is_cut(qtbot):
+    """A minimum width alone switched off Qt's minimum height."""
+    from app.config.settings import AppSettings
+    from app.ui.first_run import FirstRunDialog
+
+    dialog = FirstRunDialog(AppSettings())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.resize(dialog.minimumWidth(), 100)
+    for _ in range(4):
+        qtbot.wait(5)
+
+    layout = dialog.layout()
+    assert dialog.height() >= layout.totalHeightForWidth(dialog.width())
+
+
+def test_a_long_model_hint_does_not_squeeze_the_menus(qtbot, monkeypatch):
+    """A model not yet downloaded adds a sentence: four lines at the narrowest."""
+    from app.ui.main_window import MainWindow
+
+    monkeypatch.setattr("app.transcription.models.is_available", lambda key: False)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    window.show_transcription()
+    window.select_model("turbo")
+    window.resize(100, 100)
+    for _ in range(4):
+        qtbot.wait(5)
+
+    panel = window.setup_panel
+    assert panel.height() >= panel.layout().totalHeightForWidth(panel.width())
+    for combo in (window.loopback_combo, window.language_combo, window.model_combo):
+        assert combo.height() >= combo.sizeHint().height(), combo.currentText()
+
+
+def test_the_recordings_folder_reads_from_its_drive_letter(qtbot, tmp_path):
+    r"""A long path appeared as "sers\lollo\..." — cut mid-word at the start."""
+    from app.ui.main_window import MainWindow
+    from app.ui.settings_window import SettingsDialog
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    folder = tmp_path / ("una cartella dal nome piuttosto lungo" * 2)
+    window.app_settings.output_folder = str(folder)
+
+    dialog = SettingsDialog(window)
+    qtbot.addWidget(dialog)
+
+    assert dialog.folder_edit.cursorPosition() == 0
+    assert dialog.folder_edit.toolTip() == str(folder)

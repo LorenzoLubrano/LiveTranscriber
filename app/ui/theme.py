@@ -71,6 +71,8 @@ class Palette:
     # The two signal colours
     record: str           # recording dot
     record_soft: str
+    record_fill: str      # the start button: record red dark enough for white text
+    record_fill_hover: str
 
     # Meter, low to clipping
     meter_low: str
@@ -84,6 +86,7 @@ class Palette:
 
     # States
     focus: str
+    focus_hover: str      # the suggested button in a dialog, under the pointer
     danger: str
     ok: str
 
@@ -105,10 +108,16 @@ DARK = Palette(
     border_strong="#3C4557",
     ink="#E8EAED",
     ink_soft="#A8B0BD",
-    ink_faint="#6F7887",
+    # Hints, fine print and the privacy statement are written in this. At
+    # #6F7887 it measured 3.7:1 on the page; it now clears WCAG's 4.5:1 on
+    # every surface it sits on, with the smallest step towards ink that does.
+    ink_faint="#878F9B",
     on_accent="#0B0D12",
     record="#F05252",
     record_soft="#7A2020",
+    # The dot stays bright; the button behind white text cannot (3.5:1).
+    record_fill="#CE4747",
+    record_fill_hover="#B53E3E",
     meter_low="#3FB950",
     meter_mid="#D29922",
     meter_high="#F85149",
@@ -116,6 +125,7 @@ DARK = Palette(
     tag_pc="#7AA2F7",
     tag_mic="#C0A0E8",
     focus="#7AA2F7",
+    focus_hover="#8EAFF5",
     danger="#F85149",
     ok="#3FB950",
 )
@@ -130,10 +140,13 @@ LIGHT = Palette(
     border_strong="#C3C0B6",
     ink="#1A1D23",
     ink_soft="#4E5560",
-    ink_faint="#8A9199",
+    # Was #8A9199: 2.8:1 on the window, the weakest text in the app.
+    ink_faint="#686E76",
     on_accent="#FFFFFF",
     record="#D11A1A",
     record_soft="#F6C9C9",
+    record_fill="#D11A1A",
+    record_fill_hover="#B81717",
     meter_low="#2E9E43",
     meter_mid="#B7791F",
     meter_high="#D11A1A",
@@ -141,6 +154,7 @@ LIGHT = Palette(
     tag_pc="#2A5DB0",
     tag_mic="#6B3FA0",
     focus="#2A5DB0",
+    focus_hover="#275197",
     danger="#C0281F",
     ok="#2E9E43",
 )
@@ -450,14 +464,17 @@ QPushButton:disabled {{ color: {p.ink_faint}; border-color: {p.border}; backgrou
 QPushButton:focus {{ border: 2px solid {p.focus}; padding: 7px 15px; }}
 
 QPushButton#PrimaryButton {{
-    background: {p.record};
-    border: 1px solid {p.record};
+    background: {p.record_fill};
+    border: 1px solid {p.record_fill};
     color: #FFFFFF;
     font-size: {TYPE.large}pt;
     font-weight: 600;
     padding: 13px 26px;
 }}
-QPushButton#PrimaryButton:hover {{ background: {p.danger}; border-color: {p.danger}; }}
+/* Hover darkens: lightening a red under white text is how it lost contrast. */
+QPushButton#PrimaryButton:hover {{
+    background: {p.record_fill_hover}; border-color: {p.record_fill_hover};
+}}
 QPushButton#PrimaryButton:disabled {{
     background: {p.raised}; border-color: {p.border}; color: {p.ink_faint};
 }}
@@ -485,7 +502,9 @@ QPushButton#DialogPrimary {{
     color: {p.on_accent};
     font-weight: 600;
 }}
-QPushButton#DialogPrimary:hover {{ background: {p.tag_pc}; border-color: {p.tag_pc}; }}
+/* tag_pc is the same blue as focus in both palettes, so this used to change
+   nothing at all under the pointer. */
+QPushButton#DialogPrimary:hover {{ background: {p.focus_hover}; border-color: {p.focus_hover}; }}
 QPushButton#DialogPrimary:disabled {{
     background: {p.raised}; border-color: {p.border}; color: {p.ink_faint};
 }}
@@ -551,6 +570,26 @@ QAbstractSpinBox::down-arrow {{ image: url({down_arrow}); width: 10px; height: 1
 }}
 
 #ElapsedTime[recording="false"] {{ color: {p.ink_faint}; }}
+
+/* ---------- lists ---------- */
+/* Without a rule the recovery list drew Windows' own selection: a white bar
+   with black text in the middle of the dark theme. A chosen row is marked the
+   way a chosen first-run card is, with the focus colour on its edge. */
+QListWidget {{
+    background: {p.page};
+    border: 1px solid {p.border};
+    border-radius: 8px;
+    padding: 4px;
+    color: {p.ink};
+    outline: none;
+}}
+QListWidget::item {{ padding: 7px 9px; border-radius: 6px; border: 1px solid transparent; }}
+QListWidget::item:hover {{ background: {p.raised_hover}; }}
+QListWidget::item:selected {{
+    background: {p.raised};
+    color: {p.ink};
+    border: 1px solid {p.focus};
+}}
 
 /* ---------- scrollbars ---------- */
 QScrollBar:vertical {{

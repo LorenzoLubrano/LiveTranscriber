@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from app.sessions.recovery import RecoverableSession, dismiss, recover
 from app.sessions.transcript import Transcript
+from app.ui.sizing import keep_wrapped_text_whole
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class RecoveryDialog(QDialog):
         self.setMinimumWidth(520)
 
         layout = QVBoxLayout(self)
+        # A minimum width alone switches off Qt's own minimum height, so the
+        # dialog could be squeezed until its wrapped text was cut.
+        self._wrap_guard = keep_wrapped_text_whole(self)
         layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(14)
 
@@ -72,8 +76,12 @@ class RecoveryDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, session)
             item.setToolTip(str(session.directory))
             self.list.addItem(item)
+        # As tall as its rows, up to the old ceiling: one session inside a
+        # 150 px well read as a list still loading.
+        rows = sum(self.list.sizeHintForRow(i) for i in range(self.list.count()))
+        frame = 2 * self.list.frameWidth() + 12
+        self.list.setFixedHeight(min(150, rows + frame))
         self.list.setCurrentRow(0)
-        self.list.setMaximumHeight(150)
 
         buttons = QDialogButtonBox()
         self.recover_button = buttons.addButton(
