@@ -288,6 +288,59 @@ QRadioButton, QCheckBox {{ background: transparent; }}
     background: {p.raised};
 }}
 
+/* ---------- the door: the home page ---------- */
+#Wordmark {{
+    color: {p.ink_faint};
+    font-size: {TYPE.small}pt;
+    font-weight: 600;
+}}
+
+/* The greeting speaks in the transcript's own face: what this app makes is
+   written text, so the page that welcomes you is set in the type it produces. */
+#Greeting {{
+    color: {p.ink};
+    font-family: {reading};
+    font-size: 19pt;
+}}
+
+#Standfirst {{
+    color: {p.ink_soft};
+    font-size: {TYPE.body}pt;
+}}
+
+QPushButton#ChoiceCard {{
+    background: {p.instrument};
+    border: 1px solid {p.border};
+    border-left: 3px solid {p.border_strong};
+    border-radius: 10px;
+    padding: 0;
+    text-align: left;
+}}
+QPushButton#ChoiceCard:hover {{ background: {p.raised_hover}; }}
+QPushButton#ChoiceCard:pressed {{ background: {p.border}; }}
+QPushButton#ChoiceCard:focus {{
+    border: 2px solid {p.focus};
+    border-left: 3px solid {p.focus};
+}}
+/* The one card that records is marked in the colour that means recording. */
+QPushButton#ChoiceCard[primary="true"] {{ border-left: 3px solid {p.record}; }}
+
+#ChoiceTitle {{
+    color: {p.ink};
+    font-size: {TYPE.large}pt;
+    font-weight: 600;
+}}
+
+#ChoiceHint {{
+    color: {p.ink_soft};
+    font-size: {TYPE.small}pt;
+}}
+
+#Fineprint {{
+    color: {p.ink_faint};
+    font-size: {TYPE.micro}pt;
+}}
+
 /* ---------- inputs ---------- */
 QComboBox {{
     background: {p.raised};

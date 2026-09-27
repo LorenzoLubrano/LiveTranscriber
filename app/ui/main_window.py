@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +54,7 @@ from app.sessions.session import (
 from app.sessions.transcript import Source, Transcript, format_timestamp
 from app.transcription import models
 from app.transcription.streaming import StreamingUpdate
+from app.ui.home_view import HomeView
 from app.ui.theme import (
     Palette,
     ThemeMode,
@@ -119,7 +121,7 @@ class MainWindow(QMainWindow):
         self._tick_timer.timeout.connect(self._tick)
         self._tick_timer.start()
 
-        self.start_button.setFocus()
+        self.home.focus_default()
 
         # Deferred so the window is painted before a modal appears over it;
         # asking about a crash against a grey rectangle looks like a second crash.
@@ -128,10 +130,21 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ UI
 
     def _build(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
+        # Two pages in one window: the door and the instrument. The settings
+        # stay a dialog, so they can be opened from either page — and during a
+        # recording, which a third page in this stack could not manage.
+        self.pages = QStackedWidget()
+        self.setCentralWidget(self.pages)
 
-        root = QVBoxLayout(central)
+        self.home = HomeView()
+        self.pages.addWidget(self.home)
+
+        self.transcription_page = self._build_transcription_page()
+        self.pages.addWidget(self.transcription_page)
+
+    def _build_transcription_page(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(12)
 
@@ -145,10 +158,14 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._build_search_bar())
         root.addLayout(self._build_transport())
+        return page
 
     def _build_titlebar(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(10)
+
+        self.home_button = QPushButton("←  Home")
+        self.home_button.setObjectName("QuietButton")
 
         title = QLabel("LiveTranscriber")
         title.setObjectName("SectionTitle")
@@ -170,6 +187,7 @@ class MainWindow(QMainWindow):
         self.settings_button.setObjectName("QuietButton")
         self.settings_button.setToolTip("Impostazioni avanzate (Ctrl+,)")
 
+        row.addWidget(self.home_button)
         row.addWidget(title)
         row.addStretch(1)
         row.addWidget(self.accel_chip)
@@ -378,6 +396,10 @@ class MainWindow(QMainWindow):
         self.export_button.clicked.connect(self.export_transcript)
         self.settings_button.clicked.connect(self.open_settings)
 
+        self.home.transcribe_requested.connect(self.show_transcription)
+        self.home.settings_requested.connect(self.open_settings)
+        self.home_button.clicked.connect(self.show_home)
+
         self.mode_group.buttonClicked.connect(lambda _: self._sync_device_rows())
         self.model_combo.currentIndexChanged.connect(self._sync_model_hint)
 
@@ -420,6 +442,7 @@ class MainWindow(QMainWindow):
         self.mic_meter.set_palette(self._palette)
 
         self._refresh_accelerator_chip()
+        self._sync_home_status()
 
     def _refresh_accelerator_chip(self) -> None:
         """Show where transcription will really run.
@@ -452,6 +475,37 @@ class MainWindow(QMainWindow):
         self._theme_mode = ThemeMode(mode)
         self._palette = palette_for(mode, system_prefers_dark())
         self._apply_theme()
+
+    def _sync_home_status(self) -> None:
+        """The home page repeats what the chip resolved, build included."""
+        from app import __version__
+
+        self.home.set_status(self.accel_chip.text(), __version__)
+
+    # ------------------------------------------------------- navigation
+
+    @Slot()
+    def show_home(self) -> None:
+        """Back to the door.
+
+        Refused outright while audio is being captured: the home page would
+        cover the transcript, the clock and the stop button, which is how a
+        running session gets forgotten. The button is disabled too, so this
+        guard only catches a programmatic caller.
+        """
+        if self.session is not None and self.session.is_active:
+            return
+        self.pages.setCurrentWidget(self.home)
+        self.home.focus_default()
+
+    @Slot()
+    def show_transcription(self) -> None:
+        self.pages.setCurrentWidget(self.transcription_page)
+        self.start_button.setFocus()
+
+    @property
+    def on_home(self) -> bool:
+        return self.pages.currentWidget() is self.home
 
     # ------------------------------------------------------------ devices
 
@@ -523,6 +577,7 @@ class MainWindow(QMainWindow):
         self.timestamps_button.setChecked(self.app_settings.show_timestamps)
         self.autoscroll_button.setChecked(self.app_settings.autoscroll)
         self._refresh_accelerator_chip()
+        self._sync_home_status()
 
     # --------------------------------------------------------- persistence
 
@@ -668,6 +723,11 @@ class MainWindow(QMainWindow):
     def start_recording(self) -> None:
         if self.session and self.session.is_active:
             return
+
+        # Ctrl+R works from the home page too, and starting a recording the
+        # user cannot see — no transcript, no clock, no stop button — is how
+        # one gets left running.
+        self.show_transcription()
 
         model_key = self.model_combo.currentData() or models.DEFAULT_MODEL
         if not models.is_available(model_key):
@@ -871,6 +931,13 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(active)
         self.pause_button.setText("Riprendi" if paused else "Pausa")
 
+        self.home_button.setEnabled(not active)
+        self.home_button.setToolTip(
+            "Ferma la registrazione per tornare alla pagina iniziale"
+            if active
+            else "Torna alla pagina iniziale"
+        )
+
         self.record_dot.set_active(recording)
         self.elapsed_label.setProperty("recording", "true" if active else "false")
         self.elapsed_label.style().unpolish(self.elapsed_label)
@@ -1038,6 +1105,12 @@ class MainWindow(QMainWindow):
         dialog = RecoveryDialog(sessions, self)
         if dialog.exec() != RecoveryDialog.DialogCode.Accepted:
             return
+
+        # What was recovered — the text, or at least the news that only audio
+        # survived — is on the transcription page, so that is where the answer
+        # to this question has to leave the user.
+        self.show_transcription()
+
         if dialog.recovered is None or not len(dialog.recovered):
             self.state_label.setText("Registrazione recuperata (solo audio)")
             return

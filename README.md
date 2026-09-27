@@ -41,6 +41,10 @@ report to `%LOCALAPPDATA%\LiveTranscriber\diagnostica.txt` and shows it.
 
 ## What it does
 
+It opens on a home page — a greeting, and the two things there are to do here:
+live transcription, or settings. The window above is what *Trascrizione dal
+vivo* opens.
+
 - **Audio PC** — records what Windows is playing, through WASAPI loopback. It
   taps the audio stream itself, so there is no room noise and no need to point a
   microphone at your speakers. Works with speakers, headphones and Bluetooth.
@@ -289,6 +293,9 @@ progetto è pubblico. In breve:
   `-nvidia`: fa la stessa cosa diverse volte più veloce.
 - **Come si installa.** Non si installa: scompatti la cartella dove vuoi e apri
   `LiveTranscriber.exe`.
+- **Come si usa.** All'apertura c'è una pagina iniziale con due scelte:
+  *Trascrizione dal vivo* e *Impostazioni*. Dalla trascrizione si torna indietro
+  con *← Home*, che resta bloccato finché una registrazione è in corso.
 - **Serve internet?** Solo la prima volta, per scaricare il modello che scegli.
   Dopo funziona con la rete staccata.
 - **Quale modello scegliere.** Lascia fare all'app: alla prima esecuzione ti

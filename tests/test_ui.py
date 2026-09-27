@@ -265,6 +265,9 @@ def test_window_starts_idle_with_setup_visible(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
+    # The instrument lives on the second page now; a user gets there by asking
+    # for live transcription, and these assertions are about what they see next.
+    window.show_transcription()
     window._update_state(SessionState.IDLE)
 
     assert window.setup_panel.isVisibleTo(window)
@@ -279,6 +282,9 @@ def test_recording_collapses_setup_and_shows_transport(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
+    # The instrument lives on the second page now; a user gets there by asking
+    # for live transcription, and these assertions are about what they see next.
+    window.show_transcription()
     window._update_state(SessionState.RECORDING)
 
     assert not window.setup_panel.isVisibleTo(window)
@@ -294,6 +300,9 @@ def test_paused_offers_resume(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
+    # The instrument lives on the second page now; a user gets there by asking
+    # for live transcription, and these assertions are about what they see next.
+    window.show_transcription()
     window._update_state(SessionState.PAUSED)
 
     assert window.pause_button.text() == "Riprendi"
@@ -601,3 +610,201 @@ def test_opening_the_settings_does_not_change_the_theme(qtbot):
 
     dialog.reject()
     assert window._palette is DARK
+
+
+# -- the home page ---------------------------------------------------------
+
+class _ActiveSession:
+    """Just enough of a session for the window to believe one is running."""
+
+    is_active = True
+    elapsed = 0.0
+    directory = None
+
+    def stats(self):
+        return {}
+
+
+def test_the_greeting_uses_the_account_name():
+    from app.ui.home_view import greeting_for
+
+    assert greeting_for("lorenzo") == "Ciao Lorenzo."
+    assert greeting_for("LORENZO") == "Ciao Lorenzo."
+    assert greeting_for("lorenzo.lubrano") == "Ciao Lorenzo."
+    assert greeting_for("CASA\\lorenzo") == "Ciao Lorenzo."
+    assert greeting_for("lorenzo@example.com") == "Ciao Lorenzo."
+    assert greeting_for("jean-pierre") == "Ciao Jean-Pierre."
+
+
+def test_an_account_that_is_not_a_name_gets_a_plain_welcome():
+    """Better a neutral greeting than "Ciao Svc12."."""
+    from app.ui.home_view import greeting_for
+
+    accounts = ("", None, "a", "svc_backup_01", "user123", "Administrator ", "utente")
+    for account in accounts:
+        assert greeting_for(account) == "Benvenuto.", account
+
+
+def test_the_window_opens_on_the_home_page(qtbot):
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window.on_home
+    assert not window.start_button.isVisibleTo(window)
+
+
+def test_the_home_page_leads_to_the_transcription(qtbot):
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.home.transcribe_card.click()
+
+    assert not window.on_home
+    assert window.start_button.isVisibleTo(window)
+    assert window.setup_panel.isVisibleTo(window)
+
+
+def test_the_transcription_page_leads_back_home(qtbot):
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show_transcription()
+    window.home_button.click()
+
+    assert window.on_home
+
+
+def test_the_settings_card_opens_the_settings(qtbot, monkeypatch):
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    opened: list[bool] = []
+    monkeypatch.setattr(window, "open_settings", lambda: opened.append(True))
+    # Re-wire, because the connection was made to the original method.
+    window.home.settings_requested.connect(window.open_settings)
+    window.home.settings_card.click()
+
+    assert opened
+
+
+def test_the_door_is_locked_while_recording(qtbot):
+    """Leaving mid-session would hide the transcript, clock and stop button."""
+    from app.sessions.session import SessionState
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show_transcription()
+    window._update_state(SessionState.RECORDING)
+
+    assert not window.home_button.isEnabled()
+    assert "Ferma la registrazione" in window.home_button.toolTip()
+
+    window.session = _ActiveSession()
+    try:
+        window.show_home()
+        assert not window.on_home, "a programmatic caller left a running session"
+    finally:
+        # Cleared before teardown, or closing the window asks to save.
+        window.session = None
+
+    window._update_state(SessionState.IDLE)
+    assert window.home_button.isEnabled()
+
+
+def test_the_home_page_says_where_transcription_runs(qtbot):
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    status = window.home.status_label.text()
+    assert window.accel_chip.text() in status
+    assert "1.0.0" in status
+
+
+def test_the_home_page_carries_the_privacy_statement(qtbot):
+    """Spec §33, verbatim, on the page where trust is decided."""
+    from app.ui.home_view import PRIVACY
+
+    assert PRIVACY == (
+        "LiveTranscriber elabora audio e trascrizioni localmente sul dispositivo. "
+        "Nessun audio viene inviato a server esterni per la trascrizione."
+    )
+
+
+def test_the_whole_card_is_clickable(qtbot):
+    """The title and description must not swallow the click."""
+    from PySide6.QtCore import Qt
+
+    from app.ui.home_view import ChoiceCard
+
+    card = ChoiceCard("Titolo", "Descrizione")
+    qtbot.addWidget(card)
+
+    for label in (card.title_label, card.hint_label):
+        assert label.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+def test_the_home_page_hardcodes_no_colours():
+    """It has to follow the theme, so every colour comes from the stylesheet."""
+    import inspect
+    import re
+
+    from app.ui import home_view
+
+    assert not re.search(r"#[0-9A-Fa-f]{6}\b", inspect.getsource(home_view))
+
+
+def test_starting_from_the_keyboard_brings_the_instrument_forward(qtbot, monkeypatch):
+    """Ctrl+R works from the home page, where nothing could stop it again."""
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert window.on_home
+
+    # Stop at the point where a real session would be built: what is being
+    # tested is which page the user is looking at, not audio capture.
+    monkeypatch.setattr("app.transcription.models.is_available", lambda key: False)
+    monkeypatch.setattr(window, "_offer_download", lambda key: None)
+    window._toggle_recording()
+
+    assert not window.on_home
+
+
+def test_recovering_a_session_shows_what_was_recovered(qtbot, monkeypatch):
+    """Recovery is offered over the home page; its answer lives on the other one."""
+    from PySide6.QtWidgets import QDialog
+
+    from app.config.settings import AppSettings
+    from app.ui.main_window import MainWindow
+
+    class FakeRecoveryDialog:
+        DialogCode = QDialog.DialogCode
+        recovered = None
+        recovered_session = None
+
+        def __init__(self, sessions, parent=None):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    settings = AppSettings()
+    settings.first_run_done = True
+    window = MainWindow(settings)
+    qtbot.addWidget(window)
+    assert window.on_home
+
+    monkeypatch.setattr("app.sessions.recovery.find_incomplete", lambda: ["interrupted"])
+    monkeypatch.setattr("app.ui.recovery_dialog.RecoveryDialog", FakeRecoveryDialog)
+    window.offer_recovery()
+
+    assert not window.on_home
