@@ -1013,3 +1013,46 @@ def test_the_recordings_folder_reads_from_its_drive_letter(qtbot, tmp_path):
 
     assert dialog.folder_edit.cursorPosition() == 0
     assert dialog.folder_edit.toolTip() == str(folder)
+
+
+def test_focus_moves_to_stop_when_a_recording_starts(qtbot):
+    """It fell to "Orari", so a second Space toggled timestamps instead of stopping."""
+    from app.sessions.session import SessionState
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show_transcription()
+    assert window.focusWidget() is window.start_button
+
+    window._update_state(SessionState.RECORDING)
+    assert window.focusWidget() is window.stop_button
+
+    window._update_state(SessionState.IDLE)
+    assert window.focusWidget() is window.start_button
+
+
+@pytest.mark.parametrize("palette", [DARK, LIGHT], ids=["dark", "light"])
+def test_control_outlines_are_visible_against_their_surroundings(palette):
+    """WCAG 1.4.11: a field's edge needs 3:1 against what it sits on (was 1.6-1.9)."""
+    for surface in ("window", "instrument", "page"):
+        ratio = _contrast(palette.border_strong, getattr(palette, surface))
+        assert ratio >= 3.0, f"border_strong on {surface}: {ratio:.2f}"
+
+
+def test_a_long_menu_entry_ends_in_an_ellipsis(qtbot):
+    """Clipped mid-word, "da scaricare (1.6" read as a typo rather than a cut."""
+    from app.ui.widgets.eliding_combo import ElidingComboBox
+
+    combo = ElidingComboBox()
+    qtbot.addWidget(combo)
+    entry = "Turbo · Qualità/velocità — da scaricare (1.6 GB)"
+    combo.addItem(entry)
+
+    short = combo.elided_text(120)
+    assert short.endswith("…") and len(short) < len(entry)
+    assert combo.elided_text(10_000) == entry, "nothing is cut when it fits"
+
+    combo.resize(140, 40)
+    combo.show()
+    assert not combo.grab().isNull()

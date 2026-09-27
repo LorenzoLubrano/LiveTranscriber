@@ -105,7 +105,10 @@ DARK = Palette(
     raised="#222834",
     raised_hover="#2A3140",
     border="#2C3340",
-    border_strong="#3C4557",
+    # The outline of every control a person can operate: fields, menus,
+    # buttons, check boxes. WCAG 1.4.11 wants 3:1 against what surrounds it;
+    # #3C4557 gave 1.9. The smallest step towards ink that clears it.
+    border_strong="#646B7A",
     ink="#E8EAED",
     ink_soft="#A8B0BD",
     # Hints, fine print and the privacy statement are written in this. At
@@ -137,7 +140,7 @@ LIGHT = Palette(
     raised="#FFFFFF",
     raised_hover="#F0EFEB",
     border="#DEDCD5",
-    border_strong="#C3C0B6",
+    border_strong="#8B8A85",   # was #C3C0B6: 1.6:1 on the window
     ink="#1A1D23",
     ink_soft="#4E5560",
     # Was #8A9199: 2.8:1 on the window, the weakest text in the app.

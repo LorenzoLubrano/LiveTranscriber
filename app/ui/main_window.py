@@ -63,6 +63,7 @@ from app.ui.theme import (
     stylesheet,
     system_prefers_dark,
 )
+from app.ui.widgets.eliding_combo import ElidingComboBox
 from app.ui.widgets.level_meter import LabelledMeter, RecordingDot
 from app.ui.widgets.transcript_view import TranscriptView
 
@@ -235,9 +236,9 @@ class MainWindow(QMainWindow):
         outer.addLayout(source_row)
 
         # -- devices
-        self.loopback_combo = QComboBox()
+        self.loopback_combo = ElidingComboBox()
         self.loopback_combo.setToolTip("Il dispositivo da cui esce l'audio del computer.")
-        self.mic_combo = QComboBox()
+        self.mic_combo = ElidingComboBox()
         self.mic_combo.setToolTip("Il microfono da registrare.")
 
         self.loopback_row = self._field("Audio dal computer", self.loopback_combo)
@@ -248,8 +249,8 @@ class MainWindow(QMainWindow):
         # -- language and model
         pair = QHBoxLayout()
         pair.setSpacing(14)
-        self.language_combo = QComboBox()
-        self.model_combo = QComboBox()
+        self.language_combo = ElidingComboBox()
+        self.model_combo = ElidingComboBox()
         # The columns are shared by proportion, not by content: a combo asks
         # for the width of its longest entry, and left to that the quality
         # column took most of the row whatever the window's width.
@@ -971,12 +972,25 @@ class MainWindow(QMainWindow):
         if active:
             self.summary_label.setText(self._summary_text())
 
+        # Read before anything is hidden: hiding the focused button makes Qt
+        # hand focus to the next one in the chain, which was "Orari". A keyboard
+        # user who started with Space then toggled timestamps with the next
+        # Space instead of stopping. Focus follows the action across the swap.
+        focused = self.focusWidget()
+        start_had_focus = focused is self.start_button
+        transport_had_focus = focused in (self.pause_button, self.stop_button)
+
         self.start_button.setVisible(not active)
         self.start_button.setEnabled(not active)
         self.pause_button.setVisible(active)
         self.stop_button.setVisible(active)
         self.stop_button.setEnabled(active)
         self.pause_button.setText("Riprendi" if paused else "Pausa")
+
+        if active and start_had_focus:
+            self.stop_button.setFocus()
+        elif not active and transport_had_focus:
+            self.start_button.setFocus()
 
         self.home_button.setEnabled(not active)
         self.home_button.setToolTip(
